@@ -111,6 +111,11 @@ class FakeRedis:
             return set()
         return set(self._sets.get(key, set()))
 
+    async def sismember(self, key: str, member: str) -> bool:
+        if self._expired(key):
+            return False
+        return member in self._sets.get(key, set())
+
     # -- misc ----------------------------------------------------------
 
     def pipeline(self):
@@ -118,6 +123,30 @@ class FakeRedis:
 
     async def ping(self):
         return True
+
+    async def delete(self, *keys: str) -> int:
+        removed = 0
+        for key in keys:
+            removed += int(
+                self._values.pop(key, None) is not None
+                or self._hashes.pop(key, None) is not None
+                or self._sets.pop(key, None) is not None
+            )
+            self._expiry.pop(key, None)
+        return removed
+
+    async def info(self, section: str = "all") -> dict:
+        return {
+            "run_id": "fake-run-id-0001",
+            "redis_version": "7.0.0-fake",
+            "uptime_in_seconds": 1,
+            "maxmemory": 0,
+            "maxmemory_policy": "noeviction",
+            "used_memory_human": "1.00M",
+        }
+
+    async def dbsize(self) -> int:
+        return self.key_count()
 
     async def aclose(self):
         return None

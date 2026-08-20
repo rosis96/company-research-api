@@ -72,6 +72,10 @@ class JobSettings(BaseModel):
     #: keeps more pages, because the per-company share still covers whole pages
     #: instead of truncating one mid-way.
     results_char_budget: int = 70000
+    #: Temporary operational endpoints under /v1/diagnostics.  They expose no
+    #: credentials, but they are behind a switch so they can be turned off once
+    #: the deployment is trusted, without a code change.
+    diagnostics_enabled: bool = True
     #: Resume jobs left running by a deploy or restart.
     resume_on_startup: bool = True
 

@@ -322,6 +322,41 @@ Unauthenticated, and deliberately absent from the GPT-facing schema.
 
 ---
 
+## Diagnostics — answering "my job vanished"
+
+Two operator-only endpoints. They require an API key, never appear in the
+GPT-facing schema, and never print a credential: the Redis URL is reported as
+host, port and database only.
+
+```bash
+curl -fsS -H "Authorization: Bearer $KEY" https://your-domain.com/v1/diagnostics/redis | jq
+curl -fsS -H "Authorization: Bearer $KEY" https://your-domain.com/v1/diagnostics/jobs/job_xxx | jq
+```
+
+`/v1/diagnostics/redis` reports the worker's pid, which Redis it is connected to,
+the server's `run_id`, `dbsize`, `maxmemory` and eviction policy, whether the
+cache and the job store share one client, and the result of writing a throwaway
+job and reading it straight back.
+
+Run it a few times. **Different `pid`, same `run_id`** means every worker shares
+one Redis, so a job created by one worker must be visible to the others.
+**Different `run_id`** means the create and the read are hitting different Redis
+servers — the only way a just-created job can be missing.
+
+`/v1/diagnostics/jobs/{job_id}` reports, for one id: the exact key, whether it
+exists, its remaining TTL (`-2` means the key is gone, `-1` means no expiry),
+whether the stored JSON decodes, and how many result rows are stored.
+
+Two log events cover the same ground when you only have Railway logs:
+`job.persisted` (written at creation, with the key, the TTL after the write and
+whether the key read back) and `job.load_miss` (written on every 404, with the
+key, its TTL and the Redis identity).
+
+Switch the endpoints off once the deployment is trusted:
+`CRA_JOBS__DIAGNOSTICS_ENABLED=false`.
+
+---
+
 ## Example request
 
 ```bash

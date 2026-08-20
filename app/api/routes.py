@@ -11,6 +11,7 @@ are reserved for auth, quota, malformed requests and server faults.
 
 from __future__ import annotations
 
+import os
 import uuid
 from functools import lru_cache
 from pathlib import Path
@@ -21,7 +22,12 @@ from fastapi.responses import HTMLResponse
 
 from app.api.auth import ApiKey, require_api_key
 from app.extract.content import truncate_at_paragraph
-from app.jobs.store import JobMeta, JobStoreUnavailable
+from app.jobs.store import (
+    JobMeta,
+    JobStoreUnavailable,
+    connection_identity,
+    server_identity,
+)
 from app.models.jobs import (
     JobCreated,
     JobCreateRequest,
@@ -264,6 +270,93 @@ async def get_research_results(
         results=rows,
         notes=notes,
     )
+
+
+# ---------------------------------------------------------------------------
+# Diagnostics (temporary, operator-facing)
+# ---------------------------------------------------------------------------
+#
+# Added to explain a production report of "POST creates a job, an immediate GET
+# says not found".  Both routes require a valid API key, are excluded from the
+# OpenAPI document the GPT imports, and can be switched off with
+# CRA_JOBS__DIAGNOSTICS_ENABLED=false.  Neither ever emits a credential: the
+# redis URL is reported as host/port/db only.
+
+
+@router.get("/v1/diagnostics/redis", include_in_schema=False)
+async def redis_diagnostics(
+    request: Request, api_key: ApiKey = Depends(require_api_key)
+) -> dict:
+    """Prove which redis this worker is talking to, and that a job round-trips.
+
+    Run it twice: if ``process.pid`` differs but ``redis.run_id`` matches, the
+    workers share one redis and the job data must be shared too.  If ``run_id``
+    differs, the create and the read are hitting different servers, which is the
+    only way a just-created job can be missing.
+    """
+    state = request.app.state
+    _require_diagnostics(state)
+    store = state.job_store
+    client = getattr(store, "_client", None)
+
+    payload: dict = {
+        "process": {"pid": os.getpid()},
+        "job_store": {
+            "available": store.available,
+            "key_prefix": state.settings.cache.key_prefix,
+            "ttl_seconds": state.settings.jobs.ttl_seconds,
+            "concurrency": state.settings.jobs.concurrency,
+        },
+        "cache": {
+            "enabled": state.settings.cache.enabled,
+            "available": state.cache.available,
+            "shares_client_with_job_store": (
+                getattr(state.cache, "_client", None) is client and client is not None
+            ),
+        },
+        "redis_connection": connection_identity(client),
+        "redis_server": await server_identity(client),
+    }
+    if store.available:
+        try:
+            payload["roundtrip"] = await store.self_test()
+        except Exception as exc:  # pragma: no cover - defensive
+            payload["roundtrip"] = {"error": f"{type(exc).__name__}: {exc}"}
+        try:
+            payload["active_jobs"] = len(await store.active_job_ids())
+        except Exception:  # pragma: no cover
+            pass
+    return payload
+
+
+@router.get("/v1/diagnostics/jobs/{job_id}", include_in_schema=False)
+async def job_diagnostics(
+    job_id: str, request: Request, api_key: ApiKey = Depends(require_api_key)
+) -> dict:
+    """Why one specific job id does or does not resolve."""
+    state = request.app.state
+    _require_diagnostics(state)
+    if not state.job_store.available:
+        raise HTTPException(
+            status_code=503,
+            detail="batch jobs require Redis, which is not currently available",
+        )
+    try:
+        detail = await state.job_store.describe(job_id)
+    except JobStoreUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    client = getattr(state.job_store, "_client", None)
+    return {
+        "process": {"pid": os.getpid()},
+        "redis_connection": connection_identity(client),
+        "redis_server": await server_identity(client),
+        "job": detail,
+    }
+
+
+def _require_diagnostics(state) -> None:
+    if not state.settings.jobs.diagnostics_enabled:
+        raise HTTPException(status_code=404, detail="diagnostics are disabled")
 
 
 # ---------------------------------------------------------------------------

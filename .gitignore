@@ -6,3 +6,6 @@ __pycache__/
 htmlcov/
 .env
 *.log
+
+# transient transfer artefact
+.job-404-fix.tgz

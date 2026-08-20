@@ -47,8 +47,19 @@ def test_exactly_the_four_gpt_actions_are_exposed(spec: dict) -> None:
 
 
 def test_internal_routes_are_not_exposed(spec: dict) -> None:
-    for hidden in ("/v1/health", "/privacy", "/bot"):
+    for hidden in (
+        "/v1/health",
+        "/privacy",
+        "/bot",
+        "/v1/diagnostics/redis",
+        "/v1/diagnostics/jobs/{job_id}",
+    ):
         assert hidden not in spec["paths"]
+
+
+def test_diagnostics_are_invisible_to_the_gpt(spec: dict) -> None:
+    """Operator endpoints must never become actions the model can call."""
+    assert "diagnostics" not in json.dumps(spec)
 
 
 def test_server_url_is_pinned(spec: dict) -> None:

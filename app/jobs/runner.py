@@ -166,7 +166,14 @@ class JobRunner:
             outcome = await self.service.run(request, key_id="job")
             return outcome.response
         except Exception as exc:
-            log.warning("job.company_failed", url=url, error=str(exc))
+            # str(exc) is empty for several httpx and ssl exceptions, which makes
+            # the log line useless exactly when it matters, so record the type.
+            log.warning(
+                "job.company_failed",
+                url=url,
+                error=str(exc) or repr(exc),
+                error_type=type(exc).__name__,
+            )
             from app.research_service import immediate_failure
 
             return immediate_failure(

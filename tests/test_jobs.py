@@ -829,3 +829,236 @@ def test_worst_case_results_page_stays_under_the_gpt_limit() -> None:
     size = len(page.model_dump_json(exclude_none=True))
     assert size < 100_000, size
     assert size < 90_000, f"less than 10% headroom: {size}"
+
+
+# ---------------------------------------------------------------------------
+# Regression: a job must be readable the instant it is created
+# ---------------------------------------------------------------------------
+#
+# Production reported POST /v1/research/jobs returning 202 with a job_id, and an
+# immediate GET of that job_id returning 404.  Nothing in this layer deletes a
+# meta key, so the tests below pin down every step between the two calls: the
+# key written is the key read, the TTL is real, the write is verified before the
+# id is handed out, and one redis client is shared by the cache and the store.
+
+
+def test_job_is_retrievable_immediately_after_creation(job_client) -> None:
+    """Create, then GET with no sleep whatsoever.  This is the reported bug."""
+    for _ in range(5):
+        created = job_client.post(
+            "/v1/research/jobs",
+            json={"urls": ["https://a.com", "https://b.com", "https://c.com"]},
+            headers=AUTH,
+        )
+        assert created.status_code == 202
+        job_id = created.json()["job_id"]
+
+        fetched = job_client.get(f"/v1/research/jobs/{job_id}", headers=AUTH)
+        assert fetched.status_code == 200, fetched.text
+        body = fetched.json()
+        assert body["job_id"] == job_id
+        assert body["total"] == 3
+        assert body["status"] in ("queued", "running", "completed")
+
+
+def test_results_are_readable_immediately_after_creation(job_client) -> None:
+    created = job_client.post(
+        "/v1/research/jobs", json={"urls": ["https://a.com"]}, headers=AUTH
+    )
+    job_id = created.json()["job_id"]
+    page = job_client.get(f"/v1/research/jobs/{job_id}/results", headers=AUTH)
+    assert page.status_code == 200, page.text
+    assert page.json()["job_id"] == job_id
+
+
+async def test_create_and_load_use_one_key(store: JobStore) -> None:
+    meta = make_meta(["https://a.com"], job_id="job_7cb1f28600ba4025")
+    await store.create(meta)
+    assert store._meta_key(meta.job_id) == "cra:job:job_7cb1f28600ba4025:meta"
+    assert await store.load("job_7cb1f28600ba4025") is not None
+
+
+async def test_ttl_is_alive_immediately_after_create(store: JobStore) -> None:
+    meta = make_meta(["https://a.com"])
+    await store.create(meta)
+    assert await store.ttl(meta.job_id) == 86400
+
+
+async def test_create_refuses_when_the_write_cannot_be_read_back(
+    fake_redis: FakeRedis,
+) -> None:
+    """A silently discarded write must be a 503, never a job_id that 404s."""
+
+    class BlackHole(FakeRedis):
+        async def set(self, key, value, ex=None, nx=False):  # noqa: D401
+            return True  # accepted, stored nowhere
+
+    store = JobStore(BlackHole(), prefix="cra", ttl_seconds=86400)
+    with pytest.raises(JobStoreUnavailable):
+        await store.create(make_meta(["https://a.com"]))
+
+
+def test_http_create_returns_503_when_the_write_is_not_verifiable(
+    job_client, fake_redis: FakeRedis
+) -> None:
+    class BlackHole(FakeRedis):
+        async def set(self, key, value, ex=None, nx=False):
+            return True
+
+    app = job_client.app
+    app.state.job_store = JobStore(BlackHole(), prefix="cra", ttl_seconds=86400)
+    app.state.job_runner = JobRunner(
+        service=app.state.research_service, store=app.state.job_store, concurrency=2
+    )
+    response = job_client.post(
+        "/v1/research/jobs", json={"urls": ["https://a.com"]}, headers=AUTH
+    )
+    assert response.status_code == 503
+    assert "redis" in response.json()["detail"].lower()
+
+
+async def test_a_completed_job_still_has_its_meta_key(store: JobStore, fake_redis) -> None:
+    """Nothing in the runner may delete or shorten the job's own key."""
+    meta = make_meta(["https://a.com", "https://b.com"])
+    await store.create(meta)
+    await run_job(JobRunner(service=StubService(), store=store, concurrency=2), meta)
+    assert await store.load(meta.job_id) is not None
+    assert await store.ttl(meta.job_id) == 86400
+
+
+def test_the_cache_and_the_job_store_share_one_redis_client(monkeypatch, fake_redis) -> None:
+    """Same client object means same instance, same database, same namespace."""
+    from app.cache.result_cache import ResultCache
+
+    async def fake_connect(cls, settings):
+        return ResultCache(settings, client=fake_redis)
+
+    monkeypatch.setattr(ResultCache, "connect", classmethod(fake_connect))
+
+    settings = Settings(
+        api_keys=f"{STANDARD_KEY}:standard",
+        environment="test",
+        log_json=False,
+        log_level="ERROR",
+        cache={"enabled": True, "redis_url": "redis://127.0.0.1:6379/0"},
+        renderer={"enabled": False},
+    )
+    app = create_app(settings)
+    with TestClient(app):
+        assert app.state.job_store._client is app.state.cache._client
+        assert app.state.job_store._prefix == settings.cache.key_prefix
+        assert app.state.job_store._ttl == settings.jobs.ttl_seconds
+
+
+# ---------------------------------------------------------------------------
+# Lenient meta decoding
+# ---------------------------------------------------------------------------
+
+
+def test_meta_survives_an_unknown_field() -> None:
+    """A field added by a later deploy must not turn old jobs into 404s."""
+    raw = json.loads(make_meta(["https://a.com"]).to_json())
+    raw["invented_in_a_later_version"] = True
+    meta = JobMeta.from_json(json.dumps(raw))
+    assert meta.job_id == "job_test"
+
+
+def test_meta_survives_a_missing_optional_field() -> None:
+    raw = json.loads(make_meta(["https://a.com"]).to_json())
+    del raw["notes"]
+    del raw["finished_at"]
+    meta = JobMeta.from_json(json.dumps(raw))
+    assert meta.notes == []
+
+
+def test_meta_without_a_job_id_is_rejected() -> None:
+    raw = json.loads(make_meta(["https://a.com"]).to_json())
+    raw["job_id"] = ""
+    with pytest.raises(ValueError):
+        JobMeta.from_json(json.dumps(raw))
+
+
+async def test_undecodable_meta_reads_as_missing(store: JobStore, fake_redis) -> None:
+    await fake_redis.set("cra:job:job_bad:meta", "{not json", ex=60)
+    assert await store.load("job_bad") is None
+
+
+# ---------------------------------------------------------------------------
+# Diagnostics
+# ---------------------------------------------------------------------------
+
+
+def test_redis_diagnostics_reports_identity_and_a_working_roundtrip(job_client) -> None:
+    response = job_client.get("/v1/diagnostics/redis", headers=AUTH)
+    assert response.status_code == 200
+    body = response.json()
+    assert body["process"]["pid"] > 0
+    assert body["job_store"]["available"] is True
+    assert body["job_store"]["key_prefix"] == "cra"
+    assert body["redis_connection"]["configured"] is True
+    assert body["roundtrip"]["write_ok"] is True
+    assert body["roundtrip"]["read_back_ok"] is True
+    assert body["roundtrip"]["ttl_after_write"] > 0
+
+
+def test_diagnostics_probe_leaves_nothing_behind(job_client, fake_redis) -> None:
+    before = fake_redis.key_count()
+    probe_id = job_client.get("/v1/diagnostics/redis", headers=AUTH).json()["roundtrip"][
+        "probe_job_id"
+    ]
+    assert fake_redis.key_count() <= before + 1  # the active set may be created
+    assert f"cra:job:{probe_id}:meta" not in fake_redis._values
+
+
+def test_job_diagnostics_explains_a_present_job(job_client) -> None:
+    job_id = job_client.post(
+        "/v1/research/jobs", json={"urls": ["https://a.com"]}, headers=AUTH
+    ).json()["job_id"]
+    body = job_client.get(f"/v1/diagnostics/jobs/{job_id}", headers=AUTH).json()
+    assert body["job"]["exists"] is True
+    assert body["job"]["decode"] == "ok"
+    assert body["job"]["ttl_seconds"] == 86400
+    assert body["job"]["meta_key"] == f"cra:job:{job_id}:meta"
+
+
+def test_job_diagnostics_explains_a_missing_job(job_client) -> None:
+    body = job_client.get("/v1/diagnostics/jobs/job_does_not_exist", headers=AUTH).json()
+    assert body["job"]["exists"] is False
+    assert body["job"]["ttl_seconds"] == -2
+    assert body["job"]["decode"] == "absent"
+
+
+def test_diagnostics_require_an_api_key(job_client) -> None:
+    assert job_client.get("/v1/diagnostics/redis").status_code == 401
+    assert job_client.get("/v1/diagnostics/jobs/job_x").status_code == 401
+
+
+def test_diagnostics_can_be_switched_off(job_client) -> None:
+    job_client.app.state.settings.jobs.diagnostics_enabled = False
+    try:
+        assert job_client.get("/v1/diagnostics/redis", headers=AUTH).status_code == 404
+    finally:
+        job_client.app.state.settings.jobs.diagnostics_enabled = True
+
+
+def test_connection_identity_never_exposes_credentials() -> None:
+    import redis.asyncio as redis
+
+    from app.jobs.store import connection_identity
+
+    client = redis.from_url("redis://default:sup3r-s3cret@redis.internal:6380/3")
+    identity = connection_identity(client)
+    assert identity == {
+        "configured": True,
+        "host": "redis.internal",
+        "port": 6380,
+        "db": 3,
+    }
+    assert "sup3r-s3cret" not in json.dumps(identity)
+    assert "default" not in json.dumps(identity)
+
+
+def test_diagnostics_response_contains_no_credentials(job_client) -> None:
+    body = job_client.get("/v1/diagnostics/redis", headers=AUTH).text
+    for secret in ("password", "passwd", "auth=", STANDARD_KEY):
+        assert secret not in body
