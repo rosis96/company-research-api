@@ -182,3 +182,96 @@ def test_app_auth_behaviour_is_unchanged_by_the_export() -> None:
     assert "Authorization" in source          # still read from the header
     assert "bearer" in source.lower()         # still the bearer scheme
     assert "compare_digest" in source         # still constant-time
+
+
+# ---------------------------------------------------------------------------
+# Model-facing document quality
+# ---------------------------------------------------------------------------
+#
+# The schema is not documentation, it is prompt. Everything below is about the
+# GPT actually calling the action, and calling it correctly, rather than about
+# formal OpenAPI validity.
+
+
+def test_openapi_version_is_the_newest_3_1(spec: dict) -> None:
+    assert spec["openapi"] == "3.1.1"
+
+
+def test_every_operation_is_marked_non_consequential(spec: dict) -> None:
+    """Otherwise ChatGPT confirms every POST and offers no 'always allow'.
+
+    OpenAI's documented default is false for GET and true for everything else, so
+    without this flag a 30-company batch sits behind a confirmation dialog per
+    call. Nothing here mutates the caller's data; it reads public web pages.
+    """
+    for operations in spec["paths"].values():
+        for operation in operations.values():
+            assert operation["x-openai-isConsequential"] is False, operation["operationId"]
+
+
+def test_no_nullable_unions_survive(spec: dict) -> None:
+    """Pydantic's anyOf/null pairs describe a case the model never sees."""
+    blob = json.dumps(spec)
+    assert '"anyOf"' not in blob
+    assert '"type": "null"' not in blob
+
+
+def test_validation_error_plumbing_is_removed(spec: dict) -> None:
+    assert "HTTPValidationError" not in spec["components"]["schemas"]
+    assert "ValidationError" not in spec["components"]["schemas"]
+    for operations in spec["paths"].values():
+        for operation in operations.values():
+            assert "422" not in operation["responses"]
+
+
+def test_generated_titles_are_stripped(spec: dict) -> None:
+    for schema in spec["components"]["schemas"].values():
+        assert "title" not in schema
+        for name, prop in schema.get("properties", {}).items():
+            assert "title" not in prop, name
+    assert spec["info"]["title"] == "Company Website Research API"
+
+
+def test_a_property_genuinely_called_title_is_kept(spec: dict) -> None:
+    """Stripping auto-titles must not delete the page title field."""
+    assert "title" in spec["components"]["schemas"]["PageResult"]["properties"]
+
+
+def test_every_parameter_tells_the_model_where_the_value_comes_from(spec: dict) -> None:
+    for operations in spec["paths"].values():
+        for operation in operations.values():
+            for parameter in operation.get("parameters", []):
+                description = parameter.get("description", "")
+                assert description, parameter["name"]
+                assert len(description) <= MAX_PARAMETER_DESCRIPTION
+
+
+def test_job_id_parameter_forbids_inventing_one(spec: dict) -> None:
+    parameter = spec["paths"]["/v1/research/jobs/{job_id}"]["get"]["parameters"][0]
+    assert parameter["name"] == "job_id"
+    assert "never invent" in parameter["description"].lower()
+
+
+def test_info_description_carries_the_batch_workflow(spec: dict) -> None:
+    """The model reads this before deciding whether to call the action at all."""
+    description = spec["info"]["description"]
+    for expected in (
+        "createResearchJob",
+        "getResearchJob",
+        "getResearchResults",
+        "next_start",
+        "has_more",
+        "input_index",
+        "retry",
+    ):
+        assert expected in description, expected
+
+
+def test_info_description_forbids_filling_gaps_from_memory(spec: dict) -> None:
+    description = spec["info"]["description"].lower()
+    assert "never fill a failed row from memory" in description
+    assert "never abandon" in description
+
+
+def test_the_document_stays_small(spec: dict) -> None:
+    assert len(json.dumps(spec)) < 20_000

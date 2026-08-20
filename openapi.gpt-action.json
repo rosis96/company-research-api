@@ -1,8 +1,8 @@
 {
-  "openapi": "3.1.0",
+  "openapi": "3.1.1",
   "info": {
     "title": "Company Website Research API",
-    "description": "Reads a single company's own website and returns cleaned page text with source URLs, so that content can be written from evidence rather than assumption. Only the company's own domain is crawled.",
+    "description": "Reads a company's own website and returns the cleaned text of its most relevant pages with source URLs, so copy can be written from evidence instead of assumption. Only the company's own domain is crawled. Nothing is invented: if a site cannot be read the response says so.\n\nOne company: call research with the URL.\n\nSeveral companies (2 to 30): call createResearchJob once with every URL in the order you want them back. It returns a job_id immediately. Then call getResearchJob with that job_id and keep polling, roughly every 10 to 20 seconds, until status is \"completed\". Then call getResearchResults with the job_id, start=0 and limit=5, and keep calling it with the next_start value it gives you until has_more is false. Never ask for more than 10 at a time; responses are size limited. Do not re-create the job between polls, and do not invent a job_id -- always reuse the one you were given.\n\nReading the results. Every company comes back as its own row carrying input_index, so the original order and any duplicate URLs are preserved. A row's status is success, partial or failed. Write from the pages in that row and cite their url values. A failed row means that one site could not be read; report it as such and carry on with the rest. Never fill a failed row from memory, from search results, or from any other site.\n\nIf a call errors, retry it once. A 404 from getResearchJob means that job_id has expired or never existed, so create a new job. Never abandon the remaining companies because one call failed.",
     "version": "1.0.0"
   },
   "paths": {
@@ -35,13 +35,11 @@
           "401": {
             "description": "Missing or invalid API key"
           },
-          "422": {
-            "description": "Malformed request body"
-          },
           "429": {
             "description": "Rate limit or monthly quota exceeded"
           }
-        }
+        },
+        "x-openai-isConsequential": false
       }
     },
     "/v1/research/jobs": {
@@ -69,18 +67,9 @@
                 }
               }
             }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
           }
-        }
+        },
+        "x-openai-isConsequential": false
       }
     },
     "/v1/research/jobs/{job_id}": {
@@ -94,9 +83,9 @@
             "in": "path",
             "required": true,
             "schema": {
-              "type": "string",
-              "title": "Job Id"
-            }
+              "type": "string"
+            },
+            "description": "The exact job_id returned by createResearchJob. Copy it verbatim and reuse the same one for every poll and every results page. Never invent or guess a job_id. If this returns 404 the job has expired, so start a new one with createResearchJob."
           }
         ],
         "responses": {
@@ -109,18 +98,9 @@
                 }
               }
             }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
           }
-        }
+        },
+        "x-openai-isConsequential": false
       }
     },
     "/v1/research/jobs/{job_id}/results": {
@@ -134,9 +114,9 @@
             "in": "path",
             "required": true,
             "schema": {
-              "type": "string",
-              "title": "Job Id"
-            }
+              "type": "string"
+            },
+            "description": "The exact job_id returned by createResearchJob. Copy it verbatim and reuse the same one for every poll and every results page. Never invent or guess a job_id. If this returns 404 the job has expired, so start a new one with createResearchJob."
           },
           {
             "name": "start",
@@ -146,29 +126,20 @@
               "type": "integer",
               "minimum": 0,
               "description": "Index of the first result to return.",
-              "default": 0,
-              "title": "Start"
+              "default": 0
             },
-            "description": "Index of the first result to return."
+            "description": "Index of the first result to return. Use 0 for the first page, then the next_start value from the previous page. Results stay in the original URL order."
           },
           {
             "name": "limit",
             "in": "query",
             "required": false,
             "schema": {
-              "anyOf": [
-                {
-                  "type": "integer",
-                  "minimum": 1
-                },
-                {
-                  "type": "null"
-                }
-              ],
               "description": "How many results to return. Default 5, maximum 10.",
-              "title": "Limit"
+              "type": "integer",
+              "minimum": 1
             },
-            "description": "How many results to return. Default 5, maximum 10."
+            "description": "How many companies to return in this page. Default 5, maximum 10. Responses are size limited, so ask for a page at a time rather than the whole job."
           }
         ],
         "responses": {
@@ -181,18 +152,9 @@
                 }
               }
             }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
           }
-        }
+        },
+        "x-openai-isConsequential": false
       }
     }
   },
@@ -204,106 +166,76 @@
             "items": {
               "type": "string"
             },
-            "type": "array",
-            "title": "Found"
+            "type": "array"
           },
           "missing": {
             "items": {
               "type": "string"
             },
-            "type": "array",
-            "title": "Missing"
+            "type": "array"
           }
         },
         "additionalProperties": false,
         "type": "object",
-        "title": "Coverage",
         "description": "What the GPT does and does not have evidence for (SS10)."
       },
       "CrawlSummary": {
         "properties": {
           "pages_scraped": {
             "type": "integer",
-            "title": "Pages Scraped",
             "default": 0
           },
           "pages_failed": {
             "type": "integer",
-            "title": "Pages Failed",
             "default": 0
           },
           "browser_renders": {
             "type": "integer",
-            "title": "Browser Renders",
             "default": 0
           },
           "max_depth_reached": {
             "type": "integer",
-            "title": "Max Depth Reached",
             "default": 0
           },
           "total_words": {
             "type": "integer",
-            "title": "Total Words",
             "default": 0
           },
           "content_chars": {
             "type": "integer",
-            "title": "Content Chars",
             "default": 0
           },
           "elapsed_ms": {
             "type": "integer",
-            "title": "Elapsed Ms",
             "default": 0
           },
           "stopped_reason": {
-            "anyOf": [
-              {
-                "type": "string",
-                "enum": [
-                  "budget_reached",
-                  "deadline",
-                  "candidates_exhausted",
-                  "char_budget_reached"
-                ]
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Stopped Reason"
+            "type": "string",
+            "enum": [
+              "budget_reached",
+              "deadline",
+              "candidates_exhausted",
+              "char_budget_reached"
+            ]
           },
           "cache_hit": {
             "type": "boolean",
-            "title": "Cache Hit",
             "default": false
           }
         },
         "additionalProperties": false,
-        "type": "object",
-        "title": "CrawlSummary"
+        "type": "object"
       },
       "FailedPage": {
         "properties": {
           "url": {
-            "type": "string",
-            "title": "Url"
+            "type": "string"
           },
           "reason_code": {
-            "type": "string",
-            "title": "Reason Code"
+            "type": "string"
           },
           "http_status": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Http Status"
+            "type": "integer"
           }
         },
         "additionalProperties": false,
@@ -311,21 +243,7 @@
         "required": [
           "url",
           "reason_code"
-        ],
-        "title": "FailedPage"
-      },
-      "HTTPValidationError": {
-        "properties": {
-          "detail": {
-            "items": {
-              "$ref": "#/components/schemas/ValidationError"
-            },
-            "type": "array",
-            "title": "Detail"
-          }
-        },
-        "type": "object",
-        "title": "HTTPValidationError"
+        ]
       },
       "JobCreateRequest": {
         "properties": {
@@ -335,7 +253,6 @@
             },
             "type": "array",
             "minItems": 1,
-            "title": "Urls",
             "description": "Company website URLs to research, in the order you want the results. Duplicates are kept and each gets its own result row.",
             "examples": [
               [
@@ -351,38 +268,28 @@
               "standard",
               "deep"
             ],
-            "title": "Research Depth",
             "description": "How much of each site to read. Applies to every URL in the job.",
             "default": "standard"
           },
           "focus": {
-            "anyOf": [
-              {
-                "items": {
-                  "type": "string",
-                  "enum": [
-                    "case_studies",
-                    "services",
-                    "products",
-                    "industries",
-                    "customers",
-                    "about",
-                    "pricing"
-                  ]
-                },
-                "type": "array",
-                "maxItems": 7
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Focus",
-            "description": "Optional bias toward particular page types, applied to every URL."
+            "description": "Optional bias toward particular page types, applied to every URL.",
+            "items": {
+              "type": "string",
+              "enum": [
+                "case_studies",
+                "services",
+                "products",
+                "industries",
+                "customers",
+                "about",
+                "pricing"
+              ]
+            },
+            "type": "array",
+            "maxItems": 7
           },
           "force_refresh": {
             "type": "boolean",
-            "title": "Force Refresh",
             "description": "Bypass cached results and re-crawl every site.",
             "default": false
           }
@@ -392,14 +299,12 @@
         "required": [
           "urls"
         ],
-        "title": "JobCreateRequest",
         "description": "Start a batch research job."
       },
       "JobCreated": {
         "properties": {
           "job_id": {
-            "type": "string",
-            "title": "Job Id"
+            "type": "string"
           },
           "status": {
             "type": "string",
@@ -408,12 +313,10 @@
               "running",
               "completed",
               "failed"
-            ],
-            "title": "Status"
+            ]
           },
           "total": {
-            "type": "integer",
-            "title": "Total"
+            "type": "integer"
           }
         },
         "additionalProperties": false,
@@ -423,14 +326,12 @@
           "status",
           "total"
         ],
-        "title": "JobCreated",
         "description": "Returned immediately; the crawling happens in the background."
       },
       "JobProgress": {
         "properties": {
           "job_id": {
-            "type": "string",
-            "title": "Job Id"
+            "type": "string"
           },
           "status": {
             "type": "string",
@@ -439,61 +340,38 @@
               "running",
               "completed",
               "failed"
-            ],
-            "title": "Status"
+            ]
           },
           "total": {
-            "type": "integer",
-            "title": "Total"
+            "type": "integer"
           },
           "completed": {
             "type": "integer",
-            "title": "Completed",
             "default": 0
           },
           "successful": {
             "type": "integer",
-            "title": "Successful",
             "default": 0
           },
           "partial": {
             "type": "integer",
-            "title": "Partial",
             "default": 0
           },
           "failed": {
             "type": "integer",
-            "title": "Failed",
             "default": 0
           },
           "created_at": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Created At"
+            "type": "string"
           },
           "finished_at": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Finished At"
+            "type": "string"
           },
           "notes": {
             "items": {
               "type": "string"
             },
-            "type": "array",
-            "title": "Notes"
+            "type": "array"
           }
         },
         "additionalProperties": false,
@@ -503,29 +381,18 @@
           "status",
           "total"
         ],
-        "title": "JobProgress",
         "description": "Poll this until status is 'completed'."
       },
       "JobResultRow": {
         "properties": {
           "input_index": {
-            "type": "integer",
-            "title": "Input Index"
+            "type": "integer"
           },
           "requested_url": {
-            "type": "string",
-            "title": "Requested Url"
+            "type": "string"
           },
           "canonical_domain": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Canonical Domain"
+            "type": "string"
           },
           "status": {
             "type": "string",
@@ -533,60 +400,32 @@
               "success",
               "partial",
               "failed"
-            ],
-            "title": "Status"
+            ]
           },
           "evidence_sufficient": {
             "type": "boolean",
-            "title": "Evidence Sufficient",
             "default": false
           },
           "status_reason": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Status Reason"
+            "type": "string"
           },
           "site_name": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Site Name"
+            "type": "string"
           },
           "tagline": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Tagline"
+            "type": "string"
           },
           "pages": {
             "items": {
               "$ref": "#/components/schemas/PageResult"
             },
-            "type": "array",
-            "title": "Pages"
+            "type": "array"
           },
           "coverage": {
             "$ref": "#/components/schemas/Coverage"
           },
           "content_truncated": {
             "type": "boolean",
-            "title": "Content Truncated",
             "default": false
           }
         },
@@ -597,14 +436,12 @@
           "requested_url",
           "status"
         ],
-        "title": "JobResultRow",
         "description": "One company's evidence inside a batch result page.\n\nCarries the same attribution guarantees as a single research response:\n``pages[]`` entries each keep their own URL, and nothing is merged across\ncompanies (invariant 2)."
       },
       "JobResultsPage": {
         "properties": {
           "job_id": {
-            "type": "string",
-            "title": "Job Id"
+            "type": "string"
           },
           "status": {
             "type": "string",
@@ -613,58 +450,41 @@
               "running",
               "completed",
               "failed"
-            ],
-            "title": "Status"
+            ]
           },
           "total": {
-            "type": "integer",
-            "title": "Total"
+            "type": "integer"
           },
           "completed": {
-            "type": "integer",
-            "title": "Completed"
+            "type": "integer"
           },
           "start": {
-            "type": "integer",
-            "title": "Start"
+            "type": "integer"
           },
           "limit": {
-            "type": "integer",
-            "title": "Limit"
+            "type": "integer"
           },
           "returned": {
-            "type": "integer",
-            "title": "Returned"
+            "type": "integer"
           },
           "has_more": {
             "type": "boolean",
-            "title": "Has More",
             "default": false
           },
           "next_start": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Next Start"
+            "type": "integer"
           },
           "results": {
             "items": {
               "$ref": "#/components/schemas/JobResultRow"
             },
-            "type": "array",
-            "title": "Results"
+            "type": "array"
           },
           "notes": {
             "items": {
               "type": "string"
             },
-            "type": "array",
-            "title": "Notes"
+            "type": "array"
           }
         },
         "additionalProperties": false,
@@ -678,99 +498,53 @@
           "limit",
           "returned"
         ],
-        "title": "JobResultsPage",
         "description": "A bounded slice of a job's results.\n\nNever returns every company at once: 30 companies of full evidence is several\nhundred thousand characters, and GPT Actions cap a response at 100,000 (SS0)."
       },
       "Organization": {
         "properties": {
           "legal_name": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Legal Name"
+            "type": "string"
           },
           "description": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Description"
+            "type": "string"
           },
           "founding_date": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Founding Date"
+            "type": "string"
           },
           "employees": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Employees"
+            "type": "string"
           },
           "locations": {
             "items": {
               "type": "string"
             },
-            "type": "array",
-            "title": "Locations"
+            "type": "array"
           },
           "area_served": {
             "items": {
               "type": "string"
             },
-            "type": "array",
-            "title": "Area Served"
+            "type": "array"
           },
           "knows_about": {
             "items": {
               "type": "string"
             },
-            "type": "array",
-            "title": "Knows About"
+            "type": "array"
           }
         },
         "additionalProperties": false,
         "type": "object",
-        "title": "Organization",
         "description": "Allowlisted JSON-LD organization facts (SS8).\n\nDeliberately excludes ``sameAs``, ``logo``, ``contactPoint`` and -- as a\ncorrectness requirement rather than a size optimisation -- ``aggregateRating``\nand ``review``, which are third-party data."
       },
       "PageResult": {
         "properties": {
           "url": {
-            "type": "string",
-            "title": "Url"
+            "type": "string"
           },
           "final_url": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Final Url",
-            "description": "Present only when it differs from url."
+            "description": "Present only when it differs from url.",
+            "type": "string"
           },
           "page_type": {
             "type": "string",
@@ -797,40 +571,27 @@
               "blog_post",
               "resource",
               "other"
-            ],
-            "title": "Page Type"
+            ]
           },
           "title": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Title"
+            "type": "string"
           },
           "headings": {
             "items": {
               "type": "string"
             },
-            "type": "array",
-            "title": "Headings"
+            "type": "array"
           },
           "word_count": {
             "type": "integer",
-            "title": "Word Count",
             "default": 0
           },
           "truncated": {
             "type": "boolean",
-            "title": "Truncated",
             "default": false
           },
           "content": {
-            "type": "string",
-            "title": "Content"
+            "type": "string"
           }
         },
         "additionalProperties": false,
@@ -840,7 +601,6 @@
           "page_type",
           "content"
         ],
-        "title": "PageResult",
         "description": "One scraped page.\n\nContent only ever exists inside one of these objects, each of which carries\nits own ``url`` -- this is the structural guarantee behind invariant 2."
       },
       "ResearchRequest": {
@@ -849,7 +609,6 @@
             "type": "string",
             "maxLength": 2048,
             "minLength": 3,
-            "title": "Url",
             "description": "The company's website URL, for example https://example.com. The scheme may be omitted. Only this domain is crawled.",
             "examples": [
               "https://example.com"
@@ -862,38 +621,28 @@
               "standard",
               "deep"
             ],
-            "title": "Research Depth",
             "description": "How much of the site to read. 'quick' is faster and shallower, 'standard' is the default, 'deep' reads more pages.",
             "default": "standard"
           },
           "focus": {
-            "anyOf": [
-              {
-                "items": {
-                  "type": "string",
-                  "enum": [
-                    "case_studies",
-                    "services",
-                    "products",
-                    "industries",
-                    "customers",
-                    "about",
-                    "pricing"
-                  ]
-                },
-                "type": "array",
-                "maxItems": 7
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Focus",
-            "description": "Optional bias toward particular page types. Does not restrict the crawl to only those types."
+            "description": "Optional bias toward particular page types. Does not restrict the crawl to only those types.",
+            "items": {
+              "type": "string",
+              "enum": [
+                "case_studies",
+                "services",
+                "products",
+                "industries",
+                "customers",
+                "about",
+                "pricing"
+              ]
+            },
+            "type": "array",
+            "maxItems": 7
           },
           "force_refresh": {
             "type": "boolean",
-            "title": "Force Refresh",
             "description": "Bypass the cached result for this domain and re-crawl.",
             "default": false
           }
@@ -903,19 +652,16 @@
         "required": [
           "url"
         ],
-        "title": "ResearchRequest",
         "description": "One company website to research."
       },
       "ResearchResponse": {
         "properties": {
           "schema_version": {
             "type": "string",
-            "title": "Schema Version",
             "default": "1.1"
           },
           "request_id": {
-            "type": "string",
-            "title": "Request Id"
+            "type": "string"
           },
           "status": {
             "type": "string",
@@ -923,23 +669,13 @@
               "success",
               "partial",
               "failed"
-            ],
-            "title": "Status"
+            ]
           },
           "status_reason": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Status Reason"
+            "type": "string"
           },
           "evidence_sufficient": {
             "type": "boolean",
-            "title": "Evidence Sufficient",
             "default": false
           },
           "site": {
@@ -949,15 +685,13 @@
             "items": {
               "$ref": "#/components/schemas/PageResult"
             },
-            "type": "array",
-            "title": "Pages"
+            "type": "array"
           },
           "failed_pages": {
             "items": {
               "$ref": "#/components/schemas/FailedPage"
             },
-            "type": "array",
-            "title": "Failed Pages"
+            "type": "array"
           },
           "coverage": {
             "$ref": "#/components/schemas/Coverage"
@@ -969,20 +703,11 @@
             "items": {
               "type": "string"
             },
-            "type": "array",
-            "title": "Notes"
+            "type": "array"
           },
           "debug": {
-            "anyOf": [
-              {
-                "additionalProperties": true,
-                "type": "object"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Debug"
+            "additionalProperties": true,
+            "type": "object"
           }
         },
         "additionalProperties": false,
@@ -992,96 +717,38 @@
           "status",
           "site"
         ],
-        "title": "ResearchResponse",
         "description": "The complete result body.\n\nAlways returned with HTTP 200, including for crawl failures (SS11), so that\nGPT Actions do not treat a blocked or dead website as an infrastructure\nerror and fall back on model knowledge."
       },
       "SiteInfo": {
         "properties": {
           "requested_url": {
-            "type": "string",
-            "title": "Requested Url"
+            "type": "string"
           },
           "final_url": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Final Url"
+            "type": "string"
           },
           "canonical_domain": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Canonical Domain"
+            "type": "string"
           },
           "domain_rebased": {
             "type": "boolean",
-            "title": "Domain Rebased",
             "default": false
           },
           "language": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Language"
+            "type": "string"
           },
           "site_name": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Site Name"
+            "type": "string"
           },
           "tagline": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Tagline"
+            "type": "string"
           },
           "organization": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/Organization"
-              },
-              {
-                "type": "null"
-              }
-            ]
+            "$ref": "#/components/schemas/Organization"
           },
           "site_wide_content": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Site Wide Content",
-            "description": "Text that appeared on most pages of the site, deduplicated and stated once. Site-level context, not attributable to one page."
+            "description": "Text that appeared on most pages of the site, deduplicated and stated once. Site-level context, not attributable to one page.",
+            "type": "string"
           }
         },
         "additionalProperties": false,
@@ -1089,48 +756,7 @@
         "required": [
           "requested_url"
         ],
-        "title": "SiteInfo",
         "description": "Site-level context (SS10)."
-      },
-      "ValidationError": {
-        "properties": {
-          "loc": {
-            "items": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "integer"
-                }
-              ]
-            },
-            "type": "array",
-            "title": "Location"
-          },
-          "msg": {
-            "type": "string",
-            "title": "Message"
-          },
-          "type": {
-            "type": "string",
-            "title": "Error Type"
-          },
-          "input": {
-            "title": "Input"
-          },
-          "ctx": {
-            "type": "object",
-            "title": "Context"
-          }
-        },
-        "type": "object",
-        "required": [
-          "loc",
-          "msg",
-          "type"
-        ],
-        "title": "ValidationError"
       }
     },
     "securitySchemes": {
