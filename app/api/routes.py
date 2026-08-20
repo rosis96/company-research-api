@@ -14,9 +14,12 @@ from __future__ import annotations
 import asyncio
 import time
 import uuid
+from functools import lru_cache
+from pathlib import Path
 
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+from fastapi.responses import HTMLResponse
 
 from app.api.auth import ApiKey, require_api_key
 from app.cache.result_cache import cache_key, ttl_for
@@ -32,6 +35,30 @@ from app.security.url_guard import GuardError, coerce_input_url
 log = structlog.get_logger(__name__)
 
 router = APIRouter()
+
+STATIC_DIR = Path(__file__).resolve().parents[1] / "static"
+
+
+@lru_cache(maxsize=4)
+def _static_page(name: str) -> str:
+    """Read a static page once and keep it in memory.
+
+    Only ever called with literal names from the routes below, so no request
+    input reaches the filesystem path.
+    """
+    return (STATIC_DIR / name).read_text(encoding="utf-8")
+
+
+@router.get("/privacy", response_class=HTMLResponse, include_in_schema=False)
+async def privacy_policy() -> HTMLResponse:
+    """Required to publish a Custom GPT with Actions publicly."""
+    return HTMLResponse(_static_page("privacy.html"))
+
+
+@router.get("/bot", response_class=HTMLResponse, include_in_schema=False)
+async def bot_info() -> HTMLResponse:
+    """The page site owners look for when they see the User-Agent in their logs."""
+    return HTMLResponse(_static_page("bot.html"))
 
 
 @router.get(

@@ -142,6 +142,48 @@ pytest -m renderer
 
 ---
 
+## Calibration — do this before you trust the output
+
+The test suite proves the **logic** is right against fixture sites. It cannot prove the
+**thresholds** are right, because those depend on what real websites in your market look
+like. Until you have run real prospects through it, every number in
+`app/config/limits.yaml` is an educated guess.
+
+```bash
+export CRA_BASE_URL=https://your-domain.com
+export CRA_ADVANCED_KEY=<your advanced-scope key>
+
+cp scripts/domains.example.txt domains.txt   # then put 25-40 real prospects in it
+python scripts/calibrate.py domains.txt --out reports/run-01
+```
+
+Produces `reports/run-01.json` (every raw response) and `reports/run-01.md` (the tuning
+report). Re-analyse without re-crawling:
+
+```bash
+python scripts/calibrate.py domains.txt --from-json reports/run-01.json --out reports/run-01b
+```
+
+The report tells you:
+
+| Section | Answers |
+|---|---|
+| Outcomes | What share of prospects the GPT can actually write about |
+| Why sites failed | Which reason codes dominate, with examples |
+| Threshold diagnostics | Sites that failed the word test **and by how much** — the number needed to retune `min_words_homepage` |
+| Deadline pressure | Whether crawls are approaching the 45 s GPT Actions timeout |
+| What the crawler found | Page-type coverage, especially whether case studies are being reached |
+| Lexicon gaps | Pages discovered repeatedly that the concept lexicon could not classify |
+| Suggested next actions | Concrete config changes, each tied to a measured number |
+
+**Workflow:** run it → change one thing in `app/config/*.yaml` → **bump
+`CRA_CONFIG_VERSION`** → re-run → compare. Without the version bump the cache serves the
+previous results and it looks like nothing happened.
+
+Expect two or three rounds. Tuning is normal, not a sign something is broken.
+
+---
+
 ## Production deployment (VPS + Docker + Caddy)
 
 **Machine: 2 vCPU / 4 GB RAM minimum.** The 4 GB floor is set by Chromium, not by

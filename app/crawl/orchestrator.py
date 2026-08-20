@@ -91,6 +91,11 @@ class CrawlState:
     seen_urls: set[str] = field(default_factory=set)
     content_hashes: set[int] = field(default_factory=set)
     robots_notes: list[str] = field(default_factory=list)
+    #: Every scored candidate, kept for the debug block only.  This is what
+    #: makes lexicon gaps visible during calibration: a page that keeps being
+    #: discovered, never selected and classified "other" is vocabulary the
+    #: lexicon does not yet know.
+    scored_candidates: list[Candidate] = field(default_factory=list)
 
     @property
     def max_renders(self) -> int:
@@ -254,7 +259,19 @@ class ResearchOrchestrator:
                     if verdict.reason == "challenge"
                     else ReasonCode.TOO_THIN
                 )
-                state.failures.append(FetchFailure(url=result.final_url, reason=reason))
+                # Record how far short the page fell.  Tuning the sufficiency
+                # thresholds is impossible from a bare verdict: the operator
+                # needs to know whether a site missed by 5 words or by 200.
+                state.failures.append(
+                    FetchFailure(
+                        url=result.final_url,
+                        reason=reason,
+                        detail=(
+                            f"sufficiency={verdict.reason} words={verdict.word_count} "
+                            f"threshold={self.limits.sufficiency['min_words_homepage']}"
+                        ),
+                    )
+                )
                 return None
             result = rendered
             # A homepage that needed rendering means the whole site is a JS app.
@@ -293,6 +310,7 @@ class ResearchOrchestrator:
 
         for candidate in filtered.values():
             rank.score_candidate(candidate, context)
+        state.scored_candidates.extend(filtered.values())
         return filtered
 
     async def _discover_sitemaps(
@@ -421,6 +439,7 @@ class ResearchOrchestrator:
 
         for candidate in fresh:
             rank.score_candidate(candidate, context)
+        state.scored_candidates.extend(fresh)
 
         selected = rank.select(
             fresh,
@@ -796,7 +815,15 @@ class ResearchOrchestrator:
         for page in pages:
             if page.word_count < state.budget.min_words_keep_page and not page.is_homepage:
                 state.failures.append(
-                    FetchFailure(url=page.final_url, reason=ReasonCode.TOO_THIN)
+                    FetchFailure(
+                        url=page.final_url,
+                        reason=ReasonCode.TOO_THIN,
+                        detail=(
+                            f"words={page.word_count} "
+                            f"threshold={state.budget.min_words_keep_page} "
+                            f"page_type={page.page_type}"
+                        ),
+                    )
                 )
                 dropped_thin += 1
                 continue
@@ -976,6 +1003,7 @@ class ResearchOrchestrator:
         return False
 
     def _debug_block(self, state: CrawlState, pages: list[ExtractedPage]) -> dict:
+        returned_urls = {_key_url(page.final_url) for page in pages}
         return {
             "urls_discovered": state.urls_discovered,
             "urls_after_filtering": state.urls_after_filtering,
@@ -1007,6 +1035,24 @@ class ResearchOrchestrator:
                     "methods_tried": failure.methods_tried,
                 }
                 for failure in state.failures
+            ],
+            "unselected_candidates": [
+                {
+                    "url": candidate.url,
+                    "score": candidate.score,
+                    "page_type": candidate.page_type,
+                    "category": candidate.category,
+                    "concept": candidate.concept_key,
+                    "anchor": (candidate.anchor_texts or [""])[0][:60],
+                }
+                for candidate in sorted(
+                    (
+                        c
+                        for c in state.scored_candidates
+                        if _key_url(c.url) not in returned_urls
+                    ),
+                    key=rank.sort_key,
+                )[:15]
             ],
         }
 

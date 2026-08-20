@@ -44,15 +44,13 @@ USER appuser
 EXPOSE 8000
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=40s --retries=3 \
-    CMD curl -fsS http://127.0.0.1:8000/v1/health || exit 1
+    CMD curl -fsS "http://127.0.0.1:${PORT:-8000}/v1/health" || exit 1
 
 ENTRYPOINT ["/usr/bin/tini", "--"]
 
 # Two workers, not 2 x CPU: worker count here is bounded by Chromium memory,
-# not by CPU (SS14).
-CMD ["uvicorn", "app.main:app", \
-     "--host", "0.0.0.0", \
-     "--port", "8000", \
-     "--workers", "2", \
-     "--timeout-keep-alive", "65", \
-     "--no-access-log"]
+# not by CPU (SS14).  Drop WEB_CONCURRENCY to 1 on a container under ~2 GB.
+#
+# PORT is honoured because platforms such as Railway inject it; it defaults to
+# 8000 so `docker run` and docker-compose behave unchanged.
+CMD ["sh", "-c", "exec uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000} --workers ${WEB_CONCURRENCY:-2} --timeout-keep-alive 65 --no-access-log"]

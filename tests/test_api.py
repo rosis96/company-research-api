@@ -370,3 +370,36 @@ def test_request_schema_has_no_numeric_crawl_knobs(client) -> None:
     for knob in ("max_pages", "max_depth", "timeout", "max_content_length"):
         assert knob not in properties
     assert set(properties) == {"url", "research_depth", "focus", "force_refresh", "advanced"}
+
+
+# ---------------------------------------------------------------------------
+# Static pages required to publish a GPT
+# ---------------------------------------------------------------------------
+
+
+def test_privacy_policy_is_served(client) -> None:
+    """A reachable privacy policy URL is required to publish a GPT publicly."""
+    response = client.get("/privacy")
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/html")
+    assert "Privacy Policy" in response.text
+    assert "robots.txt" in response.text  # the website-owner opt-out section
+
+
+def test_bot_info_page_is_served(client) -> None:
+    """The page site owners look for after seeing the User-Agent in their logs."""
+    response = client.get("/bot")
+    assert response.status_code == 200
+    assert "CompanyResearchBot" in response.text
+    assert "Disallow: /" in response.text
+
+
+def test_static_pages_need_no_authentication(client) -> None:
+    for path in ("/privacy", "/bot"):
+        assert client.get(path).status_code == 200
+
+
+def test_static_pages_are_absent_from_the_gpt_schema(client) -> None:
+    spec = client.get("/openapi.json").json()
+    assert "/privacy" not in spec["paths"]
+    assert "/bot" not in spec["paths"]

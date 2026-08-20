@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>About CompanyResearchBot</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { max-width: 42rem; margin: 0 auto; padding: 3rem 1.5rem 6rem;
+         font: 16px/1.65 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+  h1 { font-size: 1.7rem; }
+  h2 { font-size: 1.1rem; margin-top: 2rem; }
+  code, pre { background: rgba(128,128,128,.15); border-radius: 3px; }
+  code { padding: .1rem .3rem; }
+  pre { padding: .9rem 1rem; overflow-x: auto; }
+  .todo { background: rgba(255,196,0,.16); border-left: 3px solid #e0a800;
+          padding: .75rem 1rem; margin: 1.5rem 0; border-radius: 0 4px 4px 0; }
+</style>
+</head>
+<body>
+
+<h1>CompanyResearchBot</h1>
+
+<div class="todo">
+  <strong>Before publishing:</strong> replace <code>REPLACE_EMAIL</code> and
+  <code>REPLACE_ENTITY</code>, then delete this box.
+</div>
+
+<p>You are probably here because you saw <code>CompanyResearchBot</code> in your server
+logs. This page explains what it is and how to stop it.</p>
+
+<h2>What it does</h2>
+<p>CompanyResearchBot reads a small number of public pages from a company website —
+typically the homepage plus pages such as About, Services and Case Studies — and extracts
+the text so that it can be summarised accurately by the person researching that company.
+It is operated by REPLACE_ENTITY.</p>
+
+<h2>How it behaves</h2>
+<ul>
+  <li>Requests <code>/robots.txt</code> first and <strong>honours it</strong>, including
+      <code>Crawl-delay</code>.</li>
+  <li>Reads roughly <strong>5–15 pages</strong> per visit, then stops. It does not crawl
+      entire sites.</li>
+  <li>Uses at most 4 concurrent connections, with a delay between requests.</li>
+  <li>Never submits forms, logs in, enters credentials, adds to a cart, or attempts to
+      reach private, paywalled or password-protected areas.</li>
+  <li>Never follows links to other domains — it stays on the site it was asked about.</li>
+  <li>Skips login, account, cart, checkout, privacy and terms pages entirely.</li>
+  <li>Identifies itself honestly. It does not impersonate a browser to evade blocking.</li>
+</ul>
+
+<h2>How to block it</h2>
+<p>Add this to your <code>robots.txt</code>:</p>
+<pre>User-agent: CompanyResearchBot
+Disallow: /</pre>
+<p>The crawler checks this before every visit and will stop requesting your site.</p>
+
+<h2>Contact</h2>
+<p>Questions, complaints, or a request to be permanently excluded regardless of
+<code>robots.txt</code>: <a href="mailto:REPLACE_EMAIL">REPLACE_EMAIL</a>. We will action
+exclusion requests without argument.</p>
+
+<p><a href="/privacy">Privacy policy</a></p>
+
+</body>
+</html>

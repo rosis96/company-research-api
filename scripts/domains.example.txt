@@ -1,0 +1,18 @@
+# One company website per line. Blank lines and # comments are ignored.
+#
+#   export CRA_BASE_URL=https://your-domain.com
+#   export CRA_ADVANCED_KEY=<advanced-scope key>
+#   python scripts/calibrate.py scripts/domains.example.txt --out reports/run-01
+#
+# Use 25-40 REAL prospects from your actual target market. The point of this
+# exercise is to find out how the crawler behaves on the kinds of site you will
+# really send it, so a curated list of famous websites is close to useless here.
+#
+# Try to include, deliberately:
+#   - a few small sites with terse copy       (tests min_words_homepage)
+#   - a few JavaScript-heavy / Webflow sites  (tests the renderer)
+#   - a few with case studies behind a grid   (tests what V1.5 would unlock)
+#   - a few that publish PDFs                 (same)
+#   - at least one you expect to fail         (confirms honest failure)
+
+example.com
