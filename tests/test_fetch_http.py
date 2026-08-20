@@ -356,3 +356,87 @@ async def test_expired_deadline_short_circuits(probe_fetcher, probe_site) -> Non
 async def test_identifiable_user_agent_is_sent(probe_fetcher, probe_site, deadline) -> None:
     assert "Bot" in probe_fetcher._client.headers["User-Agent"]
     await probe_fetcher.aclose()
+
+
+# ---------------------------------------------------------------------------
+# Content-Encoding: never ask for what we cannot decode
+# ---------------------------------------------------------------------------
+#
+# The original header was the literal string "gzip, deflate, br", but
+# httpx[http2] does not install a brotli decoder. Every CDN that honoured the
+# request sent brotli, httpx found no decoder and passed the compressed bytes
+# through as response text, and the extractor was handed binary. Sites were
+# reported as unreadable when they were merely compressed.
+
+
+def test_we_only_advertise_encodings_we_can_decode() -> None:
+    from httpx._decoders import SUPPORTED_DECODERS
+
+    from app.fetch.http import ACCEPT_ENCODING
+
+    advertised = {token.strip() for token in ACCEPT_ENCODING.split(",")}
+    assert advertised, "the header must not be empty"
+    undecodable = advertised - set(SUPPORTED_DECODERS)
+    assert not undecodable, (
+        f"advertising {sorted(undecodable)} without a decoder installed makes "
+        "every CDN return bytes we cannot read"
+    )
+
+
+def test_brotli_and_zstd_decoders_are_actually_installed() -> None:
+    """A deployment without these silently degrades to unreadable pages.
+
+    Pinned in requirements.txt as httpx[http2,brotli,zstd]. If this fails, the
+    image was built from a stale requirements file.
+    """
+    from httpx._decoders import SUPPORTED_DECODERS
+
+    assert "br" in SUPPORTED_DECODERS
+    assert "zstd" in SUPPORTED_DECODERS
+
+
+def test_the_header_is_ordered_by_preference() -> None:
+    from app.fetch.http import ACCEPT_ENCODING
+
+    assert ACCEPT_ENCODING.startswith("zstd, br")
+
+
+def test_real_html_is_not_mistaken_for_binary() -> None:
+    from app.fetch.http import looks_binary
+
+    html = "<html lang='en'><head><title>Acme</title></head><body>" + "word " * 500
+    assert looks_binary(html) is False
+    assert looks_binary("") is False
+    assert looks_binary("text\nwith\ttabs\r\nand newlines") is False
+
+
+def test_undecoded_compressed_bytes_are_recognised() -> None:
+    from app.fetch.http import looks_binary
+
+    brotli_ish = "\x1b?\x01\x00$\x80\x12\x00\x03\x04\x05\x06\x07\x0b\x0c\x0e\x0f"
+    assert looks_binary(brotli_ish) is True
+
+
+async def test_a_body_we_cannot_decode_is_dropped_not_extracted(
+    guard, budget, fixture_servers
+) -> None:
+    """Better to report nothing than to extract noise as if it were copy."""
+    from app.fetch.http import HttpFetcher
+    from app.models.internal import Deadline
+
+    server = fixture_servers["static"]
+    fetcher = HttpFetcher(
+        guard, user_agent="CompanyResearchBot/1.0 (+https://example.test/bot)",
+        budget=budget, max_redirect_hops=5,
+    )
+    try:
+        outcome = await fetcher.fetch(
+            server.url("/"), deadline=Deadline(30_000), scope=None,
+            allow_domain_rebase=True,
+        )
+        # The fixture serves clean HTML, so this must survive untouched --
+        # the binary guard must not eat legitimate pages.
+        assert outcome.ok
+        assert "<" in outcome.result.html
+    finally:
+        await fetcher.aclose()

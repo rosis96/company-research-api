@@ -45,6 +45,50 @@ _META_CHARSET = re.compile(
 )
 
 
+def _supported_content_encodings() -> str:
+    """Advertise exactly the encodings httpx can actually decode.
+
+    This used to be the hardcoded string ``"gzip, deflate, br"``. httpx only
+    installs a brotli decoder when the ``brotli`` package is present, and it was
+    not: ``httpx[http2]`` does not pull it in. So the client asked for brotli,
+    every CDN in front of a modern marketing site happily obliged, and httpx --
+    finding no decoder for ``Content-Encoding: br`` -- passed the *compressed
+    bytes* through as the response text. The extractor then received binary and
+    the site was reported as thin or unreadable.
+
+    Deriving the header from ``SUPPORTED_DECODERS`` makes that class of bug
+    impossible: we can only ever ask for what we can decode, whatever optional
+    packages happen to be installed.
+    """
+    from httpx._decoders import SUPPORTED_DECODERS
+
+    preferred = ("zstd", "br", "gzip", "deflate")
+    available = [name for name in preferred if name in SUPPORTED_DECODERS]
+    return ", ".join(available) if available else "identity"
+
+
+ACCEPT_ENCODING = _supported_content_encodings()
+
+#: Bytes that cannot be text. A body that still looks like this after decoding
+#: is compressed with something we did not decode, so it must not be handed to
+#: the extractor as if it were a web page.
+_BINARY_SIGNATURE = bytes(range(0, 9)) + bytes(range(14, 32))
+
+
+def looks_binary(text: str) -> bool:
+    """Is this decoded body actually undecoded binary?
+
+    Real HTML is overwhelmingly printable. A body carrying more than a few
+    percent control characters is compressed, encrypted or otherwise not text,
+    and reporting it as thin content is more honest than parsing the noise.
+    """
+    if not text:
+        return False
+    sample = text[:2048]
+    control = sum(1 for ch in sample if ord(ch) < 32 and ch not in "\t\n\r")
+    return control / len(sample) > 0.02
+
+
 @dataclass(slots=True)
 class FetchOutcome:
     """Either a successful fetch or a typed failure -- never both."""
@@ -88,7 +132,7 @@ class HttpFetcher:
                 "User-Agent": user_agent,
                 "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.5",
                 "Accept-Language": "en-US,en;q=0.9",
-                "Accept-Encoding": "gzip, deflate, br",
+                "Accept-Encoding": ACCEPT_ENCODING,
                 "Cache-Control": "no-cache",
             },
             max_redirects=0,
@@ -261,6 +305,18 @@ class HttpFetcher:
             # Declared length is only a hint; the stream is what is enforced.
             body, truncated = await self._read_capped(response, max_bytes)
             text = _decode(body, response)
+            if looks_binary(text):
+                # A server ignored our Accept-Encoding and sent something we
+                # cannot decode. Returning the noise would let it be extracted
+                # as if it were copy, so the page is dropped instead and the
+                # sufficiency test routes it to the browser (SS5).
+                log.warning(
+                    "fetch.undecodable_body",
+                    url=target.url,
+                    content_encoding=response.headers.get("content-encoding", ""),
+                    bytes=len(body),
+                )
+                text = ""
             return (
                 FetchOutcome(
                     result=FetchResult(
