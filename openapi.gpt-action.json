@@ -10,25 +10,7 @@
       "post": {
         "summary": "Research one company website",
         "description": "Researches one company website. Crawls the company's own domain only (homepage plus its most relevant internal pages such as services, about and case studies) and returns cleaned page text with source URLs. Returns status \"failed\" if the site cannot be read - never invents content.",
-        "operationId": "research_v1_research_post",
-        "parameters": [
-          {
-            "name": "authorization",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Authorization"
-            }
-          }
-        ],
+        "operationId": "research",
         "requestBody": {
           "required": true,
           "content": {
@@ -58,6 +40,157 @@
           },
           "429": {
             "description": "Rate limit or monthly quota exceeded"
+          }
+        }
+      }
+    },
+    "/v1/research/jobs": {
+      "post": {
+        "summary": "Start a batch research job",
+        "description": "Starts researching several company websites in the background and returns a job_id immediately. Input order and duplicates are preserved. Poll getResearchJob for progress, then read getResearchResults in pages.",
+        "operationId": "createResearchJob",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JobCreateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobCreated"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/research/jobs/{job_id}": {
+      "get": {
+        "summary": "Check batch job progress",
+        "description": "Returns progress for a batch research job. Poll until status is 'completed', then read the results with getResearchResults.",
+        "operationId": "getResearchJob",
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Job Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobProgress"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/research/jobs/{job_id}/results": {
+      "get": {
+        "summary": "Read batch job results",
+        "description": "Returns a page of results in the original input order. Use start and limit to page through them. Never returns every company at once, because responses are size limited.",
+        "operationId": "getResearchResults",
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Job Id"
+            }
+          },
+          {
+            "name": "start",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Index of the first result to return.",
+              "default": 0,
+              "title": "Start"
+            },
+            "description": "Index of the first result to return."
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "How many results to return. Default 5, maximum 10.",
+              "title": "Limit"
+            },
+            "description": "How many results to return. Default 5, maximum 10."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobResultsPage"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
           }
         }
       }
@@ -180,6 +313,373 @@
           "reason_code"
         ],
         "title": "FailedPage"
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "type": "array",
+            "title": "Detail"
+          }
+        },
+        "type": "object",
+        "title": "HTTPValidationError"
+      },
+      "JobCreateRequest": {
+        "properties": {
+          "urls": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "minItems": 1,
+            "title": "Urls",
+            "description": "Company website URLs to research, in the order you want the results. Duplicates are kept and each gets its own result row.",
+            "examples": [
+              [
+                "https://company1.com",
+                "https://company2.com"
+              ]
+            ]
+          },
+          "research_depth": {
+            "type": "string",
+            "enum": [
+              "quick",
+              "standard",
+              "deep"
+            ],
+            "title": "Research Depth",
+            "description": "How much of each site to read. Applies to every URL in the job.",
+            "default": "standard"
+          },
+          "focus": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "case_studies",
+                    "services",
+                    "products",
+                    "industries",
+                    "customers",
+                    "about",
+                    "pricing"
+                  ]
+                },
+                "type": "array",
+                "maxItems": 7
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Focus",
+            "description": "Optional bias toward particular page types, applied to every URL."
+          },
+          "force_refresh": {
+            "type": "boolean",
+            "title": "Force Refresh",
+            "description": "Bypass cached results and re-crawl every site.",
+            "default": false
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "urls"
+        ],
+        "title": "JobCreateRequest",
+        "description": "Start a batch research job."
+      },
+      "JobCreated": {
+        "properties": {
+          "job_id": {
+            "type": "string",
+            "title": "Job Id"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "queued",
+              "running",
+              "completed",
+              "failed"
+            ],
+            "title": "Status"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "job_id",
+          "status",
+          "total"
+        ],
+        "title": "JobCreated",
+        "description": "Returned immediately; the crawling happens in the background."
+      },
+      "JobProgress": {
+        "properties": {
+          "job_id": {
+            "type": "string",
+            "title": "Job Id"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "queued",
+              "running",
+              "completed",
+              "failed"
+            ],
+            "title": "Status"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          },
+          "completed": {
+            "type": "integer",
+            "title": "Completed",
+            "default": 0
+          },
+          "successful": {
+            "type": "integer",
+            "title": "Successful",
+            "default": 0
+          },
+          "partial": {
+            "type": "integer",
+            "title": "Partial",
+            "default": 0
+          },
+          "failed": {
+            "type": "integer",
+            "title": "Failed",
+            "default": 0
+          },
+          "created_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created At"
+          },
+          "finished_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finished At"
+          },
+          "notes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Notes"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "job_id",
+          "status",
+          "total"
+        ],
+        "title": "JobProgress",
+        "description": "Poll this until status is 'completed'."
+      },
+      "JobResultRow": {
+        "properties": {
+          "input_index": {
+            "type": "integer",
+            "title": "Input Index"
+          },
+          "requested_url": {
+            "type": "string",
+            "title": "Requested Url"
+          },
+          "canonical_domain": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Canonical Domain"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "success",
+              "partial",
+              "failed"
+            ],
+            "title": "Status"
+          },
+          "evidence_sufficient": {
+            "type": "boolean",
+            "title": "Evidence Sufficient",
+            "default": false
+          },
+          "status_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Status Reason"
+          },
+          "site_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Site Name"
+          },
+          "tagline": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tagline"
+          },
+          "pages": {
+            "items": {
+              "$ref": "#/components/schemas/PageResult"
+            },
+            "type": "array",
+            "title": "Pages"
+          },
+          "coverage": {
+            "$ref": "#/components/schemas/Coverage"
+          },
+          "content_truncated": {
+            "type": "boolean",
+            "title": "Content Truncated",
+            "default": false
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "input_index",
+          "requested_url",
+          "status"
+        ],
+        "title": "JobResultRow",
+        "description": "One company's evidence inside a batch result page.\n\nCarries the same attribution guarantees as a single research response:\n``pages[]`` entries each keep their own URL, and nothing is merged across\ncompanies (invariant 2)."
+      },
+      "JobResultsPage": {
+        "properties": {
+          "job_id": {
+            "type": "string",
+            "title": "Job Id"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "queued",
+              "running",
+              "completed",
+              "failed"
+            ],
+            "title": "Status"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          },
+          "completed": {
+            "type": "integer",
+            "title": "Completed"
+          },
+          "start": {
+            "type": "integer",
+            "title": "Start"
+          },
+          "limit": {
+            "type": "integer",
+            "title": "Limit"
+          },
+          "returned": {
+            "type": "integer",
+            "title": "Returned"
+          },
+          "has_more": {
+            "type": "boolean",
+            "title": "Has More",
+            "default": false
+          },
+          "next_start": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Start"
+          },
+          "results": {
+            "items": {
+              "$ref": "#/components/schemas/JobResultRow"
+            },
+            "type": "array",
+            "title": "Results"
+          },
+          "notes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Notes"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "job_id",
+          "status",
+          "total",
+          "completed",
+          "start",
+          "limit",
+          "returned"
+        ],
+        "title": "JobResultsPage",
+        "description": "A bounded slice of a job's results.\n\nNever returns every company at once: 30 companies of full evidence is several\nhundred thousand characters, and GPT Actions cap a response at 100,000 (SS0)."
       },
       "Organization": {
         "properties": {
@@ -591,6 +1091,46 @@
         ],
         "title": "SiteInfo",
         "description": "Site-level context (SS10)."
+      },
+      "ValidationError": {
+        "properties": {
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "type": "array",
+            "title": "Location"
+          },
+          "msg": {
+            "type": "string",
+            "title": "Message"
+          },
+          "type": {
+            "type": "string",
+            "title": "Error Type"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "ctx": {
+            "type": "object",
+            "title": "Context"
+          }
+        },
+        "type": "object",
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError"
       }
     },
     "securitySchemes": {
@@ -602,7 +1142,7 @@
   },
   "servers": [
     {
-      "url": "https://research.example.com"
+      "url": "https://company-research-api-production.up.railway.app"
     }
   ],
   "security": [

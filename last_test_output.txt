@@ -1,0 +1,49 @@
+API : https://company-research-api-production.up.railway.app
+Key : loaded from ~/.cra_key (43 characters)
+Time: 2026-08-20 16:46:28
+Testing 2 site(s). Each takes 3-35 seconds.
+==================================================================
+
+>>> https://www.python.org
+    status   : success  evidence_sufficient=True
+    site     : Welcome to Python.org  [python.org]
+    tagline  : Intuitive Interpretation
+    crawl    : pages=11 failed=0 renders=0 depth=2
+    volume   : words=4936 chars=30362 time=2101ms stopped=budget_reached
+    found    : about, case_study, case_study_index, homepage, other, product_detail, products
+    missing  : customers, industries, pricing, services, solutions, testimonials
+      homepage               161w  https://www.python.org/
+      case_study             898w  https://www.python.org/success-stories/building-robust-codebases-with-pythons-
+      case_study            1151w  https://www.python.org/success-stories/python-on-arm-2025-update/
+      case_study_index       326w  https://www.python.org/success-stories/
+      products               152w  https://www.python.org/psf-landing/
+      case_study             122w  https://www.python.org/success-stories/python-provides-convenience-and-flexibi
+      product_detail         481w  https://www.python.org/download/other/
+      about                  341w  https://www.python.org/about/apps/
+      about                  445w  https://www.python.org/about/gettingstarted/
+      other                  280w  https://www.python.org/community/
+      other                  123w  https://www.python.org/doc/
+    wall clock: 1s
+
+>>> https://antonioandparis.com
+    status   : success  evidence_sufficient=True
+    site     : Antonio & Paris  [antonioandparis.com]
+    tagline  : Igniting a love affair between your brand and consumer. Antonio & Paris, a global brand co
+    crawl    : pages=10 failed=0 renders=1 depth=1
+    volume   : words=8966 chars=42079 time=6134ms stopped=candidates_exhausted
+    found    : about, customers, homepage, other, portfolio, products, resource, services
+    missing  : case_study, industries, pricing, solutions, testimonials
+      homepage               189w  https://antonioandparis.com/
+      portfolio              416w  https://antonioandparis.com/work/
+      services              1287w  https://antonioandparis.com/the-importance-of-being-nice-customer-service-stor
+      services               644w  https://antonioandparis.com/transforming-your-brand-the-power-of-service-attit
+      about                  556w  https://antonioandparis.com/about/
+      products               740w  https://antonioandparis.com/transforming-focus-group-participants-to-co-creato
+      customers              717w  https://antonioandparis.com/the-ever-evolving-customer-journey/
+      about                  738w  https://antonioandparis.com/what-the-us-could-learn-about-digital-inclusion/
+      resource               621w  https://antonioandparis.com/insights/
+      other                  145w  https://antonioandparis.com/connect/
+    wall clock: 7s
+
+==================================================================
+Saved to last_test_output.txt

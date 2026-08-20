@@ -33,8 +33,14 @@ def client(guard, fixture_servers):
     with TestClient(app) as test_client:
         # Swap in the test guard so fixture hostnames on loopback are reachable.
         # Production wiring never uses a policy with extra_allowed_networks.
+        #
+        # ResearchService receives its dependencies explicitly rather than
+        # reading app.state, which keeps it framework-free -- so the swap has to
+        # be applied to the service as well, not only to app.state.
         app.state.guard = guard
         app.state.cache = InMemoryCache(CacheSettings(enabled=True))
+        app.state.research_service.guard = guard
+        app.state.research_service.cache = app.state.cache
         test_client.app_instance = app
         yield test_client
 
@@ -186,6 +192,7 @@ def test_rate_limit_returns_429_with_retry_after(guard, fixture_servers) -> None
     app = create_app(settings)
     with TestClient(app) as test_client:
         app.state.guard = guard
+        app.state.research_service.guard = guard
         url = fixture_servers["static"].url("/")
         first = post(test_client, url)
         second = post(test_client, url)

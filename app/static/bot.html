@@ -13,18 +13,12 @@
   code, pre { background: rgba(128,128,128,.15); border-radius: 3px; }
   code { padding: .1rem .3rem; }
   pre { padding: .9rem 1rem; overflow-x: auto; }
-  .todo { background: rgba(255,196,0,.16); border-left: 3px solid #e0a800;
-          padding: .75rem 1rem; margin: 1.5rem 0; border-radius: 0 4px 4px 0; }
 </style>
 </head>
 <body>
 
 <h1>CompanyResearchBot</h1>
 
-<div class="todo">
-  <strong>Before publishing:</strong> replace <code>REPLACE_EMAIL</code> and
-  <code>REPLACE_ENTITY</code>, then delete this box.
-</div>
 
 <p>You are probably here because you saw <code>CompanyResearchBot</code> in your server
 logs. This page explains what it is and how to stop it.</p>
@@ -33,13 +27,13 @@ logs. This page explains what it is and how to stop it.</p>
 <p>CompanyResearchBot reads a small number of public pages from a company website —
 typically the homepage plus pages such as About, Services and Case Studies — and extracts
 the text so that it can be summarised accurately by the person researching that company.
-It is operated by REPLACE_ENTITY.</p>
+It is operated by Ascendly.</p>
 
 <h2>How it behaves</h2>
 <ul>
   <li>Requests <code>/robots.txt</code> first and <strong>honours it</strong>, including
       <code>Crawl-delay</code>.</li>
-  <li>Reads roughly <strong>5–15 pages</strong> per visit, then stops. It does not crawl
+  <li>Reads <strong>at most about 11 pages</strong> per visit, then stops. It does not crawl
       entire sites.</li>
   <li>Uses at most 4 concurrent connections, with a delay between requests.</li>
   <li>Never submits forms, logs in, enters credentials, adds to a cart, or attempts to
@@ -57,7 +51,7 @@ Disallow: /</pre>
 
 <h2>Contact</h2>
 <p>Questions, complaints, or a request to be permanently excluded regardless of
-<code>robots.txt</code>: <a href="mailto:REPLACE_EMAIL">REPLACE_EMAIL</a>. We will action
+<code>robots.txt</code>: <a href="mailto:info@ascendly.one">info@ascendly.one</a>. We will action
 exclusion requests without argument.</p>
 
 <p><a href="/privacy">Privacy policy</a></p>

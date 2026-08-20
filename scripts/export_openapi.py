@@ -7,7 +7,16 @@ This script produces a GPT-facing variant that:
 
 * strips the ``advanced`` options object, so the model cannot pass numeric crawl
   knobs it has no basis for choosing;
-* strips ``/v1/health``;
+* removes the ``Authorization`` header *parameter*.  FastAPI documents it because
+  the auth dependency reads that header, but GPT Actions supply it themselves from
+  the configured API key and warn "parameter authorization has location header;
+  ignoring".  The bearer ``securitySchemes`` entry below is the correct way to
+  declare it, and it is already present;
+* gives the operation a short ``operationId`` so the action is named ``research``
+  in the GPT rather than ``research_v1_research_post``;
+* strips ``/v1/health``, ``/privacy`` and ``/bot``, exposing exactly four
+  actions: ``research``, ``createResearchJob``, ``getResearchJob`` and
+  ``getResearchResults``;
 * pins the server URL to the deployment domain;
 * enforces the 300/700-character description limits GPT Actions impose;
 * declares bearer authentication, which is the only auth style that works given
@@ -50,11 +59,11 @@ def build(server_url: str) -> dict[str, Any]:
         "assumption. Only the company's own domain is crawled."
     )
 
-    # Keep only the research endpoint.
+    # Keep only the actions the GPT may call.
     spec["paths"] = {
         path: operations
         for path, operations in spec["paths"].items()
-        if path == "/v1/research"
+        if path in EXPOSED_PATHS
     }
 
     schemas = spec.setdefault("components", {}).setdefault("schemas", {})
@@ -66,6 +75,8 @@ def build(server_url: str) -> dict[str, Any]:
     schemas.pop("AdvancedOptions-Input", None)
 
     _strip_dangling_refs(spec, {"AdvancedOptions", "AdvancedOptions-Input"})
+    _strip_auth_header_parameters(spec)
+    _simplify_operation_ids(spec)
     _enforce_description_limits(spec)
 
     # GPT Actions do not support custom headers; bearer is the correct choice.
@@ -75,6 +86,56 @@ def build(server_url: str) -> dict[str, Any]:
     spec["security"] = [{"bearerAuth": []}]
 
     return spec
+
+
+#: Header parameters GPT Actions provide themselves and warn about if declared.
+AUTH_HEADER_NAMES = {"authorization", "x-api-key", "api-key"}
+
+#: Short, stable operation ids, so the GPT calls the action by a readable name.
+OPERATION_IDS = {
+    ("/v1/research", "post"): "research",
+    ("/v1/research/jobs", "post"): "createResearchJob",
+    ("/v1/research/jobs/{job_id}", "get"): "getResearchJob",
+    ("/v1/research/jobs/{job_id}/results", "get"): "getResearchResults",
+}
+
+#: Exactly the actions the GPT may call.  Anything else is stripped.
+EXPOSED_PATHS = tuple(path for path, _ in OPERATION_IDS)
+
+
+def _strip_auth_header_parameters(spec: dict[str, Any]) -> None:
+    """Drop declared auth headers; authentication is expressed by securitySchemes.
+
+    Leaving these in produces the ChatGPT import warning "parameter authorization
+    has location header; ignoring" -- harmless but noisy, and it implies the model
+    should supply the header, which it must not.
+    """
+    for operations in spec["paths"].values():
+        for operation in operations.values():
+            if not isinstance(operation, dict):
+                continue
+            parameters = operation.get("parameters")
+            if not parameters:
+                continue
+            kept = [
+                parameter
+                for parameter in parameters
+                if not (
+                    parameter.get("in") == "header"
+                    and str(parameter.get("name", "")).lower() in AUTH_HEADER_NAMES
+                )
+            ]
+            if kept:
+                operation["parameters"] = kept
+            else:
+                operation.pop("parameters", None)
+
+
+def _simplify_operation_ids(spec: dict[str, Any]) -> None:
+    for path, operations in spec["paths"].items():
+        for method, operation in operations.items():
+            if isinstance(operation, dict) and (path, method) in OPERATION_IDS:
+                operation["operationId"] = OPERATION_IDS[(path, method)]
 
 
 def _strip_dangling_refs(node: Any, removed: set[str]) -> None:

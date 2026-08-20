@@ -46,6 +46,36 @@ class CacheSettings(BaseModel):
     connect_timeout_seconds: float = 1.0
 
 
+class JobSettings(BaseModel):
+    """Batch research jobs (SS14).
+
+    Unlike the result cache, which fails open, jobs *require* Redis: a job whose
+    state cannot be persisted is a job that silently vanishes.
+    """
+
+    enabled: bool = True
+    max_urls: int = 30
+    #: Companies crawled at once inside one job.
+    concurrency: int = 5
+    #: How long job state and results live in Redis.
+    ttl_seconds: int = 86400
+    default_limit: int = 5
+    max_limit: int = 10
+    #: Character budget for one results page, shared across the companies in it.
+    #: GPT Actions cap a response at 100,000 characters, and 30 companies of full
+    #: evidence is several hundred thousand, so a slice must be budgeted the same
+    #: way a single research response is (SS10).
+    #:
+    #: 70,000 rather than 80,000: measured against worst-case content (10
+    #: companies x 11 dense pages) an 80,000 budget serialises to ~91,000
+    #: characters, leaving under 10% headroom. 70,000 lands at ~86,000 *and*
+    #: keeps more pages, because the per-company share still covers whole pages
+    #: instead of truncating one mid-way.
+    results_char_budget: int = 70000
+    #: Resume jobs left running by a deploy or restart.
+    resume_on_startup: bool = True
+
+
 class SecuritySettings(BaseModel):
     """Guard and fetch safety limits (SS12)."""
 
@@ -124,6 +154,7 @@ class Settings(BaseSettings):
     max_concurrent_crawls: int = 4
 
     robots: RobotsSettings = Field(default_factory=RobotsSettings)
+    jobs: JobSettings = Field(default_factory=JobSettings)
     cache: CacheSettings = Field(default_factory=CacheSettings)
     security: SecuritySettings = Field(default_factory=SecuritySettings)
     renderer: RendererSettings = Field(default_factory=RendererSettings)

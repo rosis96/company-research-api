@@ -12,25 +12,16 @@
   h2 { font-size: 1.15rem; margin-top: 2.25rem; }
   .updated { opacity: .65; font-size: .9rem; margin-top: 0; }
   code { background: rgba(128,128,128,.15); padding: .1rem .3rem; border-radius: 3px; }
-  .todo { background: rgba(255,196,0,.16); border-left: 3px solid #e0a800;
-          padding: .75rem 1rem; margin: 1.5rem 0; border-radius: 0 4px 4px 0; }
 </style>
 </head>
 <body>
 
 <h1>Privacy Policy</h1>
-<p class="updated">Company Website Research API · Last updated: <strong>REPLACE_DATE</strong></p>
-
-<div class="todo">
-  <strong>Before publishing:</strong> replace <code>REPLACE_ENTITY</code>,
-  <code>REPLACE_ADDRESS</code>, <code>REPLACE_EMAIL</code>, <code>REPLACE_DATE</code>,
-  <code>REPLACE_RETENTION_DAYS</code> and <code>REPLACE_HOST</code>, then delete this box.
-  This template is a starting point, not legal advice.
-</div>
+<p class="updated">Company Website Research API · Last updated: 20 August 2026</p>
 
 <h2>Who we are</h2>
-<p>This service is operated by REPLACE_ENTITY, REPLACE_ADDRESS.
-Contact: <a href="mailto:REPLACE_EMAIL">REPLACE_EMAIL</a>.</p>
+<p>This service is operated by Ascendly.
+Contact: <a href="mailto:info@ascendly.one">info@ascendly.one</a>.</p>
 
 <h2>What this service does</h2>
 <p>The Company Website Research API accepts a single company website URL and retrieves
@@ -43,30 +34,41 @@ providers.</p>
 <ul>
   <li>the company website URL submitted in the request</li>
   <li>the API key identifying the calling application</li>
-  <li>standard request metadata (timestamp, network address of the calling service)</li>
+  <li>the time of the request</li>
 </ul>
-<p>We do not request, require or intentionally collect personal data, and we do not
-receive the content of your conversation.</p>
+<p>We do not request, require or intentionally collect personal data. We do not receive
+the content of your conversation with any assistant that calls this service. Our
+application does not read or record the network address of the caller.</p>
 
 <h2>What data we store</h2>
 <ul>
-  <li><strong>Request logs</strong> — the domain requested, the outcome, timing and error
-      codes. Retained for REPLACE_RETENTION_DAYS days. Logs do not contain retrieved page
-      content.</li>
-  <li><strong>Cached research results</strong> — cleaned text extracted from the public
-      pages of the website that was researched. Retained for up to 14 days, then deleted
-      automatically.</li>
+  <li><strong>Cached research results.</strong> The cleaned text extracted from the public
+      pages of the website that was researched, held in a cache so that repeating the same
+      request does not re-crawl the site. Successful results expire automatically after
+      <strong>14 days</strong>. Incomplete results expire after 3 days, and records of
+      failed attempts after 1 to 7 days depending on the reason. Nothing is retained
+      beyond those periods.</li>
+  <li><strong>Rate-limiting counters.</strong> A per-minute request count held against a
+      truncated one-way hash of the API key, never the key itself. These expire within two
+      minutes.</li>
+  <li><strong>Operational logs.</strong> For each request we record the domain that was
+      researched, whether it succeeded, the number of pages read, timings, and a truncated
+      one-way hash identifying which API key was used. Logs do not contain retrieved page
+      content. Logs are written to our hosting provider, Railway, and are retained under
+      that provider's standard log retention; we do not operate a separate log store.</li>
 </ul>
-<p>We do not store credentials, payment data, or special-category personal data.</p>
+<p>We do not operate a database. We do not store credentials, payment data, or
+special-category personal data.</p>
 
 <h2>Content retrieved from third-party websites</h2>
 <p>The service retrieves publicly accessible pages from the website whose URL is
 submitted. It respects <code>robots.txt</code>, identifies itself with a descriptive
 User-Agent, and does not attempt to access password-protected, private or paywalled
-areas. It never submits forms, logs in, or enters credentials.</p>
+areas. It does not submit forms, log in, or enter credentials, and it does not follow
+links to other domains.</p>
 <p>If a page happens to contain personal data — for example a staff biography on a public
 "About" page — that data is processed only to return the page text to the requesting
-application, and is deleted when the cache expires.</p>
+application, and is deleted when the cached result expires.</p>
 
 <h2>Legal basis (where UK/EU GDPR applies)</h2>
 <p>Where any personal data is processed, we rely on legitimate interests: providing a
@@ -75,21 +77,22 @@ the limited, public and business-context nature of the data.</p>
 
 <h2>Sharing</h2>
 <p>We do not sell or share data with third parties. Data is processed by our hosting
-provider solely in order to operate the service.</p>
+provider, Railway, solely in order to operate the service.</p>
 
 <h2>Your rights</h2>
 <p>If you believe we hold personal data about you, contact
-<a href="mailto:REPLACE_EMAIL">REPLACE_EMAIL</a> to request access, correction or
-deletion. Because retained data expires automatically within
-REPLACE_RETENTION_DAYS days, most requests are satisfied by that schedule.</p>
+<a href="mailto:info@ascendly.one">info@ascendly.one</a> to request access, correction or
+deletion. Because cached results expire automatically within 14 days, most requests are
+satisfied by that schedule.</p>
 
 <h2>Website owners</h2>
 <p>If you operate a website and do not want this service to retrieve your pages, add a
 <code>Disallow</code> rule for the user agent <code>CompanyResearchBot</code> in your
 <code>robots.txt</code> — the service honours it. You may also email
-<a href="mailto:REPLACE_EMAIL">REPLACE_EMAIL</a> to request exclusion, and we will add
-your domain to a permanent blocklist.</p>
-<p>More about the crawler: <a href="/bot">REPLACE_HOST/bot</a>.</p>
+<a href="mailto:info@ascendly.one">info@ascendly.one</a> to request exclusion, and we will
+add your domain to a permanent blocklist.</p>
+<p>More about the crawler:
+<a href="https://company-research-api-production.up.railway.app/bot">https://company-research-api-production.up.railway.app/bot</a>.</p>
 
 <h2>Changes</h2>
 <p>We will update this page and the "last updated" date if this policy changes.</p>

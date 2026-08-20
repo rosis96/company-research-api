@@ -11,26 +11,26 @@ are reserved for auth, quota, malformed requests and server faults.
 
 from __future__ import annotations
 
-import asyncio
-import time
 import uuid
 from functools import lru_cache
 from pathlib import Path
 
 import structlog
-from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from fastapi.responses import HTMLResponse
 
 from app.api.auth import ApiKey, require_api_key
-from app.cache.result_cache import cache_key, ttl_for
-from app.crawl.orchestrator import ResearchOrchestrator
-from app.crawl.robots import RobotsPolicy
-from app.fetch.http import HttpFetcher
+from app.extract.content import truncate_at_paragraph
+from app.jobs.store import JobMeta, JobStoreUnavailable
+from app.models.jobs import (
+    JobCreated,
+    JobCreateRequest,
+    JobProgress,
+    JobResultRow,
+    JobResultsPage,
+)
 from app.models.request import ResearchRequest
 from app.models.response import SCHEMA_VERSION, HealthResponse, ResearchResponse
-from app.security.domains import registrable_domain
-from app.security.reasons import ReasonCode
-from app.security.url_guard import GuardError, coerce_input_url
 
 log = structlog.get_logger(__name__)
 
@@ -104,8 +104,174 @@ async def research(
 ) -> ResearchResponse:
     state = request.app.state
     request_id = f"req_{uuid.uuid4().hex[:16]}"
-    started = time.monotonic()
 
+    await _enforce_rate_limit(state, api_key)
+
+    if payload.advanced is not None and not api_key.is_advanced:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="advanced options require an advanced-scoped API key",
+        )
+
+    outcome = await state.research_service.run(
+        payload, request_id=request_id, key_id=api_key.short_id
+    )
+    response.headers["X-Cache"] = "HIT" if outcome.cache_hit else "MISS"
+    return outcome.response
+
+
+# ---------------------------------------------------------------------------
+# Batch research jobs
+# ---------------------------------------------------------------------------
+
+
+@router.post(
+    "/v1/research/jobs",
+    response_model=JobCreated,
+    response_model_exclude_none=True,
+    status_code=status.HTTP_202_ACCEPTED,
+    summary="Start a batch research job",
+    operation_id="createResearchJob",
+    description=(
+        "Starts researching several company websites in the background and returns "
+        "a job_id immediately. Input order and duplicates are preserved. Poll "
+        "getResearchJob for progress, then read getResearchResults in pages."
+    ),
+)
+async def create_research_job(
+    payload: JobCreateRequest,
+    request: Request,
+    api_key: ApiKey = Depends(require_api_key),
+) -> JobCreated:
+    state = request.app.state
+    settings = state.settings.jobs
+
+    await _enforce_rate_limit(state, api_key)
+
+    if not settings.enabled:
+        raise HTTPException(status_code=503, detail="batch jobs are disabled")
+
+    if len(payload.urls) > settings.max_urls:
+        raise HTTPException(
+            status_code=422,
+            detail=f"at most {settings.max_urls} urls per job, got {len(payload.urls)}",
+        )
+
+    # Batch jobs require Redis. The result cache fails open because losing it only
+    # costs a re-crawl; losing job state loses the job itself.
+    if not state.job_store.available:
+        raise HTTPException(
+            status_code=503,
+            detail="batch jobs require Redis, which is not currently available",
+        )
+
+    job_id = f"job_{uuid.uuid4().hex[:16]}"
+    meta = JobMeta(
+        job_id=job_id,
+        urls=list(payload.urls),
+        research_depth=payload.research_depth,
+        focus=list(payload.focus) if payload.focus else None,
+        force_refresh=payload.force_refresh,
+        status="queued",
+    )
+    try:
+        await state.job_store.create(meta)
+    except JobStoreUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    state.job_runner.start(meta)
+
+    log.info(
+        "job.created",
+        job_id=job_id,
+        total=meta.total,
+        key_id=api_key.short_id,
+        depth=payload.research_depth,
+    )
+    return JobCreated(job_id=job_id, status="queued", total=meta.total)
+
+
+@router.get(
+    "/v1/research/jobs/{job_id}",
+    response_model=JobProgress,
+    response_model_exclude_none=True,
+    summary="Check batch job progress",
+    operation_id="getResearchJob",
+    description=(
+        "Returns progress for a batch research job. Poll until status is "
+        "'completed', then read the results with getResearchResults."
+    ),
+)
+async def get_research_job(
+    job_id: str,
+    request: Request,
+    api_key: ApiKey = Depends(require_api_key),
+) -> JobProgress:
+    state = request.app.state
+    meta = await _load_job(state, job_id)
+    return meta.to_progress()
+
+
+@router.get(
+    "/v1/research/jobs/{job_id}/results",
+    response_model=JobResultsPage,
+    response_model_exclude_none=True,
+    summary="Read batch job results",
+    operation_id="getResearchResults",
+    description=(
+        "Returns a page of results in the original input order. Use start and "
+        "limit to page through them. Never returns every company at once, "
+        "because responses are size limited."
+    ),
+)
+async def get_research_results(
+    job_id: str,
+    request: Request,
+    start: int = Query(default=0, ge=0, description="Index of the first result to return."),
+    limit: int | None = Query(
+        default=None, ge=1, description="How many results to return. Default 5, maximum 10."
+    ),
+    api_key: ApiKey = Depends(require_api_key),
+) -> JobResultsPage:
+    state = request.app.state
+    settings = state.settings.jobs
+    meta = await _load_job(state, job_id)
+
+    effective_limit = min(limit or settings.default_limit, settings.max_limit)
+    indices = list(range(start, min(start + effective_limit, meta.total)))
+    rows = await state.job_store.get_results(job_id, indices)
+    rows.sort(key=lambda r: r.input_index)
+
+    notes: list[str] = []
+    trimmed = _apply_results_budget(rows, settings.results_char_budget)
+    if trimmed:
+        notes.append("page_content_trimmed_to_fit_response_budget")
+    if meta.status != "completed":
+        notes.append("job_still_running_some_results_may_be_missing")
+
+    next_start = start + effective_limit
+    has_more = next_start < meta.total
+    return JobResultsPage(
+        job_id=job_id,
+        status=meta.status,  # type: ignore[arg-type]
+        total=meta.total,
+        completed=meta.completed,
+        start=start,
+        limit=effective_limit,
+        returned=len(rows),
+        has_more=has_more,
+        next_start=next_start if has_more else None,
+        results=rows,
+        notes=notes,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+async def _enforce_rate_limit(state, api_key: ApiKey) -> None:
     verdict = await state.rate_limiter.check(api_key.short_id)
     if not verdict.allowed:
         raise HTTPException(
@@ -114,104 +280,57 @@ async def research(
             headers={"Retry-After": str(verdict.retry_after)},
         )
 
-    if payload.advanced is not None and not api_key.is_advanced:
+
+async def _load_job(state, job_id: str) -> JobMeta:
+    if not state.job_store.available:
         raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="advanced options require an advanced-scoped API key",
+            status_code=503,
+            detail="batch jobs require Redis, which is not currently available",
         )
-
-    budget = state.limits.budget(payload.research_depth)
-    robots_settings = state.settings.robots
-    if payload.advanced is not None:
-        budget = budget.with_overrides(
-            max_pages=payload.advanced.max_pages,
-            max_depth=payload.advanced.max_depth,
-            max_renders=payload.advanced.max_renders,
-            deadline_ms=payload.advanced.deadline_ms,
-            global_content_budget=payload.advanced.global_content_budget,
-        )
-        overrides = {}
-        if payload.advanced.robots_enabled is not None:
-            overrides["enabled"] = payload.advanced.robots_enabled
-        if payload.advanced.robots_apply_to_seed_url is not None:
-            overrides["apply_to_seed_url"] = payload.advanced.robots_apply_to_seed_url
-        if overrides:
-            robots_settings = robots_settings.model_copy(update=overrides)
-
-    # Cache lookup keys on the *requested* domain; a rebrand redirect is
-    # resolved during the crawl and cached under what the caller asked for.
     try:
-        seed = coerce_input_url(payload.url)
-        canonical = registrable_domain(_host_of(seed))
-    except GuardError:
-        return _immediate_failure(payload, request_id, ReasonCode.INVALID_URL)
+        meta = await state.job_store.load(job_id)
+    except JobStoreUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    if meta is None:
+        raise HTTPException(status_code=404, detail="job not found or expired")
+    return meta
 
-    key = cache_key(
-        payload,
-        canonical_domain=canonical,
-        config_version=state.settings.config_version,
-        prefix=state.settings.cache.key_prefix,
-    )
 
-    # Debug requests bypass the cache in both directions.  Reading would serve a
-    # cached response that has no debug block; writing would pollute the shared
-    # entry with a developer-only payload that normal callers would then receive.
-    debug_requested = payload.advanced is not None and payload.advanced.debug
+def _apply_results_budget(rows: list[JobResultRow], budget: int) -> bool:
+    """Fit a slice of companies inside one response.
 
-    if not payload.force_refresh and not debug_requested:
-        cached = await state.cache.get(key)
-        if cached is not None:
-            cached.request_id = request_id
-            cached.crawl_summary.cache_hit = True
-            response.headers["X-Cache"] = "HIT"
-            log.info(
-                "research.cache_hit",
-                request_id=request_id,
-                domain=canonical,
-                key_id=api_key.short_id,
-            )
-            return cached
+    Thirty companies of full evidence is several hundred thousand characters and
+    GPT Actions cap a response at 100,000, so a page of results is budgeted the
+    same way a single research response is: an equal share per company, truncated
+    at a paragraph boundary, and always flagged (invariant 5).
+    """
+    if not rows:
+        return False
 
-    response.headers["X-Cache"] = "MISS"
+    total = sum(len(page.content) for row in rows for page in row.pages)
+    if total <= budget:
+        return False
 
-    async with state.crawl_semaphore:
-        fetcher = HttpFetcher(
-            state.guard,
-            user_agent=state.settings.user_agent,
-            budget=budget,
-            max_redirect_hops=state.settings.security.max_redirect_hops,
-        )
-        try:
-            orchestrator = ResearchOrchestrator(
-                state.guard,
-                fetcher,
-                state.renderer,
-                RobotsPolicy(robots_settings, fetcher),
-                state.limits,
-            )
-            result = await orchestrator.run(payload, request_id=request_id, budget=budget)
-        finally:
-            await fetcher.aclose()
-
-    if not debug_requested:
-        await state.cache.set(key, result, ttl_for(result, state.settings.cache))
-
-    log.info(
-        "research.completed",
-        request_id=request_id,
-        domain=canonical,
-        key_id=api_key.short_id,
-        status=result.status,
-        status_reason=result.status_reason,
-        pages=result.crawl_summary.pages_scraped,
-        failed=result.crawl_summary.pages_failed,
-        renders=result.crawl_summary.browser_renders,
-        words=result.crawl_summary.total_words,
-        chars=result.crawl_summary.content_chars,
-        stopped_reason=result.crawl_summary.stopped_reason,
-        elapsed_ms=int((time.monotonic() - started) * 1000),
-    )
-    return result
+    per_company = max(1000, budget // len(rows))
+    trimmed_any = False
+    for row in rows:
+        spent = 0
+        kept = []
+        for page in row.pages:
+            remaining = per_company - spent
+            if remaining <= 0:
+                row.content_truncated = True
+                trimmed_any = True
+                break
+            if len(page.content) > remaining:
+                page.content, _ = truncate_at_paragraph(page.content, remaining)
+                page.truncated = True
+                row.content_truncated = True
+                trimmed_any = True
+            spent += len(page.content)
+            kept.append(page)
+        row.pages = kept
+    return trimmed_any
 
 
 def _host_of(url: str) -> str:
@@ -220,24 +339,3 @@ def _host_of(url: str) -> str:
     return (urlsplit(url).hostname or "").lower()
 
 
-def _immediate_failure(
-    payload: ResearchRequest, request_id: str, reason: ReasonCode
-) -> ResearchResponse:
-    from app.crawl.orchestrator import IMPORTANT_PAGE_TYPES
-    from app.models.response import Coverage, CrawlSummary, FailedPage, SiteInfo
-
-    return ResearchResponse(
-        request_id=request_id,
-        status="failed",
-        status_reason=str(reason),
-        evidence_sufficient=False,
-        site=SiteInfo(requested_url=payload.url),
-        failed_pages=[FailedPage(url=payload.url, reason_code=str(reason))],
-        coverage=Coverage(found=[], missing=list(IMPORTANT_PAGE_TYPES)),
-        crawl_summary=CrawlSummary(),
-    )
-
-
-# Kept for symmetry with the semaphore usage above.
-def _noop_semaphore() -> asyncio.Semaphore:  # pragma: no cover - helper
-    return asyncio.Semaphore(1)

@@ -27,8 +27,28 @@ def spec() -> dict:
     return build("https://research.example.com")
 
 
-def test_only_the_research_endpoint_is_exposed(spec: dict) -> None:
-    assert list(spec["paths"]) == ["/v1/research"]
+def test_exactly_the_four_gpt_actions_are_exposed(spec: dict) -> None:
+    """research plus the three batch-job actions -- nothing else."""
+    assert set(spec["paths"]) == {
+        "/v1/research",
+        "/v1/research/jobs",
+        "/v1/research/jobs/{job_id}",
+        "/v1/research/jobs/{job_id}/results",
+    }
+    ids = sorted(
+        op["operationId"] for path in spec["paths"].values() for op in path.values()
+    )
+    assert ids == [
+        "createResearchJob",
+        "getResearchJob",
+        "getResearchResults",
+        "research",
+    ]
+
+
+def test_internal_routes_are_not_exposed(spec: dict) -> None:
+    for hidden in ("/v1/health", "/privacy", "/bot"):
+        assert hidden not in spec["paths"]
 
 
 def test_server_url_is_pinned(spec: dict) -> None:
@@ -107,3 +127,47 @@ def test_committed_schema_matches_the_generator() -> None:
 
 def test_schema_is_small_enough_to_import(spec: dict) -> None:
     assert len(json.dumps(spec)) < 100_000
+
+
+# ---------------------------------------------------------------------------
+# GPT Actions import cleanliness
+# ---------------------------------------------------------------------------
+
+
+def test_no_auth_header_parameter_is_declared(spec: dict) -> None:
+    """ChatGPT warns 'parameter authorization has location header; ignoring'.
+
+    FastAPI documents the header because the auth dependency reads it, but GPT
+    Actions supply it themselves from the configured API key. Authentication is
+    declared via securitySchemes instead.
+    """
+    for operations in spec["paths"].values():
+        for operation in operations.values():
+            for parameter in operation.get("parameters", []):
+                assert parameter.get("in") != "header", parameter
+
+
+def test_no_header_parameters_anywhere(spec: dict) -> None:
+    assert '"in": "header"' not in json.dumps(spec, indent=1)
+
+
+def test_operation_id_is_short_and_readable(spec: dict) -> None:
+    """The operationId becomes the action name the GPT instructions refer to."""
+    assert spec["paths"]["/v1/research"]["post"]["operationId"] == "research"
+
+
+def test_bearer_security_is_the_only_auth_declaration(spec: dict) -> None:
+    assert spec["security"] == [{"bearerAuth": []}]
+    assert list(spec["components"]["securitySchemes"]) == ["bearerAuth"]
+
+
+def test_app_auth_behaviour_is_unchanged_by_the_export() -> None:
+    """The exporter must not touch how the running API authenticates."""
+    import inspect
+
+    from app.api import auth
+
+    source = inspect.getsource(auth)
+    assert "Authorization" in source          # still read from the header
+    assert "bearer" in source.lower()         # still the bearer scheme
+    assert "compare_digest" in source         # still constant-time

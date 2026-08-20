@@ -23,8 +23,11 @@ from app.cache.result_cache import ResultCache
 from app.config.loader import get_limits
 from app.config.settings import Settings, get_settings
 from app.fetch.renderer import build_renderer
+from app.jobs.runner import JobRunner
+from app.jobs.store import JobStore
 from app.models.response import ErrorResponse
 from app.observability.logging import configure_logging
+from app.research_service import ResearchService
 from app.security.transport import assert_pinning_supported
 from app.security.url_guard import GuardPolicy, UrlGuard
 
@@ -67,6 +70,27 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.app_version = APP_VERSION
         app.state.api_key_table = settings.api_key_table()
         app.state.crawl_semaphore = asyncio.Semaphore(settings.max_concurrent_crawls)
+
+        # One implementation of "research a company", shared by /v1/research and
+        # the batch runner, so a batch cannot drift from a single call.
+        app.state.research_service = ResearchService(
+            guard=guard,
+            renderer=renderer,
+            cache=cache,
+            settings=settings,
+            limits=limits,
+            crawl_semaphore=app.state.crawl_semaphore,
+        )
+        app.state.job_store = JobStore(
+            getattr(cache, "_client", None),
+            prefix=settings.cache.key_prefix,
+            ttl_seconds=settings.jobs.ttl_seconds,
+        )
+        app.state.job_runner = JobRunner(
+            service=app.state.research_service,
+            store=app.state.job_store,
+            concurrency=settings.jobs.concurrency,
+        )
         app.state.rate_limiter = RateLimiter(
             per_minute=settings.rate_limit_per_minute,
             monthly_quota=settings.rate_limit_monthly_quota,
@@ -78,6 +102,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             log.warning("startup.no_api_keys_configured")
         if not renderer.available:
             log.warning("startup.renderer_unavailable")
+        if settings.jobs.enabled and not app.state.job_store.available:
+            log.warning("startup.jobs_unavailable_no_redis")
+
+        # A deploy or restart kills in-flight job tasks.  Results already written
+        # to Redis survive, so resuming means crawling only the missing indices.
+        if settings.jobs.enabled and settings.jobs.resume_on_startup:
+            try:
+                resumed = await app.state.job_runner.resume_interrupted()
+                if resumed:
+                    log.info("startup.jobs_resumed", count=resumed)
+            except Exception as exc:  # pragma: no cover - never block startup
+                log.warning("startup.job_resume_failed", error=str(exc))
 
         log.info(
             "startup.ready",
@@ -90,6 +126,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         try:
             yield
         finally:
+            # Give in-flight jobs a moment to persist their last results before
+            # the process goes away; anything unfinished resumes on next boot.
+            await app.state.job_runner.drain(timeout=5.0)
             await renderer.aclose()
             await cache.aclose()
             log.info("shutdown.complete")
