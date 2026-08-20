@@ -1,0 +1,613 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Company Website Research API",
+    "description": "Reads a single company's own website and returns cleaned page text with source URLs, so that content can be written from evidence rather than assumption. Only the company's own domain is crawled.",
+    "version": "1.0.0"
+  },
+  "paths": {
+    "/v1/research": {
+      "post": {
+        "summary": "Research one company website",
+        "description": "Researches one company website. Crawls the company's own domain only (homepage plus its most relevant internal pages such as services, about and case studies) and returns cleaned page text with source URLs. Returns status \"failed\" if the site cannot be read - never invents content.",
+        "operationId": "research_v1_research_post",
+        "parameters": [
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ResearchRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResearchResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API key"
+          },
+          "422": {
+            "description": "Malformed request body"
+          },
+          "429": {
+            "description": "Rate limit or monthly quota exceeded"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "Coverage": {
+        "properties": {
+          "found": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Found"
+          },
+          "missing": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Missing"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "Coverage",
+        "description": "What the GPT does and does not have evidence for (SS10)."
+      },
+      "CrawlSummary": {
+        "properties": {
+          "pages_scraped": {
+            "type": "integer",
+            "title": "Pages Scraped",
+            "default": 0
+          },
+          "pages_failed": {
+            "type": "integer",
+            "title": "Pages Failed",
+            "default": 0
+          },
+          "browser_renders": {
+            "type": "integer",
+            "title": "Browser Renders",
+            "default": 0
+          },
+          "max_depth_reached": {
+            "type": "integer",
+            "title": "Max Depth Reached",
+            "default": 0
+          },
+          "total_words": {
+            "type": "integer",
+            "title": "Total Words",
+            "default": 0
+          },
+          "content_chars": {
+            "type": "integer",
+            "title": "Content Chars",
+            "default": 0
+          },
+          "elapsed_ms": {
+            "type": "integer",
+            "title": "Elapsed Ms",
+            "default": 0
+          },
+          "stopped_reason": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "budget_reached",
+                  "deadline",
+                  "candidates_exhausted",
+                  "char_budget_reached"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stopped Reason"
+          },
+          "cache_hit": {
+            "type": "boolean",
+            "title": "Cache Hit",
+            "default": false
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "CrawlSummary"
+      },
+      "FailedPage": {
+        "properties": {
+          "url": {
+            "type": "string",
+            "title": "Url"
+          },
+          "reason_code": {
+            "type": "string",
+            "title": "Reason Code"
+          },
+          "http_status": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Http Status"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "url",
+          "reason_code"
+        ],
+        "title": "FailedPage"
+      },
+      "Organization": {
+        "properties": {
+          "legal_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Legal Name"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "founding_date": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Founding Date"
+          },
+          "employees": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Employees"
+          },
+          "locations": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Locations"
+          },
+          "area_served": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Area Served"
+          },
+          "knows_about": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Knows About"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "Organization",
+        "description": "Allowlisted JSON-LD organization facts (SS8).\n\nDeliberately excludes ``sameAs``, ``logo``, ``contactPoint`` and -- as a\ncorrectness requirement rather than a size optimisation -- ``aggregateRating``\nand ``review``, which are third-party data."
+      },
+      "PageResult": {
+        "properties": {
+          "url": {
+            "type": "string",
+            "title": "Url"
+          },
+          "final_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Final Url",
+            "description": "Present only when it differs from url."
+          },
+          "page_type": {
+            "type": "string",
+            "enum": [
+              "homepage",
+              "about",
+              "services",
+              "service_detail",
+              "products",
+              "product_detail",
+              "solutions",
+              "industries",
+              "case_study_index",
+              "case_study",
+              "customers",
+              "testimonials",
+              "portfolio",
+              "pricing",
+              "process",
+              "team",
+              "contact",
+              "careers_overview",
+              "blog_index",
+              "blog_post",
+              "resource",
+              "other"
+            ],
+            "title": "Page Type"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          },
+          "headings": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Headings"
+          },
+          "word_count": {
+            "type": "integer",
+            "title": "Word Count",
+            "default": 0
+          },
+          "truncated": {
+            "type": "boolean",
+            "title": "Truncated",
+            "default": false
+          },
+          "content": {
+            "type": "string",
+            "title": "Content"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "url",
+          "page_type",
+          "content"
+        ],
+        "title": "PageResult",
+        "description": "One scraped page.\n\nContent only ever exists inside one of these objects, each of which carries\nits own ``url`` -- this is the structural guarantee behind invariant 2."
+      },
+      "ResearchRequest": {
+        "properties": {
+          "url": {
+            "type": "string",
+            "maxLength": 2048,
+            "minLength": 3,
+            "title": "Url",
+            "description": "The company's website URL, for example https://example.com. The scheme may be omitted. Only this domain is crawled.",
+            "examples": [
+              "https://example.com"
+            ]
+          },
+          "research_depth": {
+            "type": "string",
+            "enum": [
+              "quick",
+              "standard",
+              "deep"
+            ],
+            "title": "Research Depth",
+            "description": "How much of the site to read. 'quick' is faster and shallower, 'standard' is the default, 'deep' reads more pages.",
+            "default": "standard"
+          },
+          "focus": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "case_studies",
+                    "services",
+                    "products",
+                    "industries",
+                    "customers",
+                    "about",
+                    "pricing"
+                  ]
+                },
+                "type": "array",
+                "maxItems": 7
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Focus",
+            "description": "Optional bias toward particular page types. Does not restrict the crawl to only those types."
+          },
+          "force_refresh": {
+            "type": "boolean",
+            "title": "Force Refresh",
+            "description": "Bypass the cached result for this domain and re-crawl.",
+            "default": false
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "url"
+        ],
+        "title": "ResearchRequest",
+        "description": "One company website to research."
+      },
+      "ResearchResponse": {
+        "properties": {
+          "schema_version": {
+            "type": "string",
+            "title": "Schema Version",
+            "default": "1.1"
+          },
+          "request_id": {
+            "type": "string",
+            "title": "Request Id"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "success",
+              "partial",
+              "failed"
+            ],
+            "title": "Status"
+          },
+          "status_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Status Reason"
+          },
+          "evidence_sufficient": {
+            "type": "boolean",
+            "title": "Evidence Sufficient",
+            "default": false
+          },
+          "site": {
+            "$ref": "#/components/schemas/SiteInfo"
+          },
+          "pages": {
+            "items": {
+              "$ref": "#/components/schemas/PageResult"
+            },
+            "type": "array",
+            "title": "Pages"
+          },
+          "failed_pages": {
+            "items": {
+              "$ref": "#/components/schemas/FailedPage"
+            },
+            "type": "array",
+            "title": "Failed Pages"
+          },
+          "coverage": {
+            "$ref": "#/components/schemas/Coverage"
+          },
+          "crawl_summary": {
+            "$ref": "#/components/schemas/CrawlSummary"
+          },
+          "notes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Notes"
+          },
+          "debug": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Debug"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "request_id",
+          "status",
+          "site"
+        ],
+        "title": "ResearchResponse",
+        "description": "The complete result body.\n\nAlways returned with HTTP 200, including for crawl failures (SS11), so that\nGPT Actions do not treat a blocked or dead website as an infrastructure\nerror and fall back on model knowledge."
+      },
+      "SiteInfo": {
+        "properties": {
+          "requested_url": {
+            "type": "string",
+            "title": "Requested Url"
+          },
+          "final_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Final Url"
+          },
+          "canonical_domain": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Canonical Domain"
+          },
+          "domain_rebased": {
+            "type": "boolean",
+            "title": "Domain Rebased",
+            "default": false
+          },
+          "language": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Language"
+          },
+          "site_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Site Name"
+          },
+          "tagline": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tagline"
+          },
+          "organization": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Organization"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "site_wide_content": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Site Wide Content",
+            "description": "Text that appeared on most pages of the site, deduplicated and stated once. Site-level context, not attributable to one page."
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "requested_url"
+        ],
+        "title": "SiteInfo",
+        "description": "Site-level context (SS10)."
+      }
+    },
+    "securitySchemes": {
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer"
+      }
+    }
+  },
+  "servers": [
+    {
+      "url": "https://research.example.com"
+    }
+  ],
+  "security": [
+    {
+      "bearerAuth": []
+    }
+  ]
+}

@@ -1,0 +1,91 @@
+# Three services, as specified in SS14: caddy (TLS) + api + redis (cache).
+#
+# Redis is bound to the internal network only and never published.
+
+services:
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    environment:
+      DOMAIN: ${DOMAIN:?set DOMAIN in .env}
+      ACME_EMAIL: ${ACME_EMAIL:?set ACME_EMAIL in .env}
+    depends_on:
+      - api
+    networks:
+      - edge
+
+  api:
+    build: .
+    image: company-research-api:1.0.0
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      CRA_CACHE__REDIS_URL: redis://redis:6379/0
+    expose:
+      - "8000"
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - edge
+      - internal
+    # Chromium needs more shared memory than Docker's 64 MB default; without
+    # this, renders crash intermittently under load.
+    shm_size: "512mb"
+    # SS12, layer 2: the fetcher must not be able to reach the host's private
+    # network even if application-level validation is somehow bypassed.  On a
+    # single-host VPS this is enforced with the firewall rules in the README;
+    # the note is kept here so the requirement is visible where it is deployed.
+    security_opt:
+      - no-new-privileges:true
+    ulimits:
+      nofile:
+        soft: 8192
+        hard: 8192
+    deploy:
+      resources:
+        limits:
+          memory: 3g
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8000/v1/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 40s
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: >
+      redis-server
+      --save 900 1
+      --maxmemory 512mb
+      --maxmemory-policy allkeys-lru
+      --appendonly no
+    volumes:
+      - redis_data:/data
+    networks:
+      - internal
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+networks:
+  edge:
+  internal:
+    internal: true
+
+volumes:
+  caddy_data:
+  caddy_config:
+  redis_data:

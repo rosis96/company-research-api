@@ -1,0 +1,445 @@
+# URL exclusion rules and subdomain tiers.
+#
+# Architecture reference: SS6 ("Hard exclusions", "Subdomain policy") and SS7.
+# Everything here is data, never code.
+
+version: 1
+
+# ---------------------------------------------------------------------------
+# Schemes that are dropped during link discovery.  (The URL guard independently
+# refuses anything that is not http/https; this list stops such links from even
+# entering the candidate pool.)
+# ---------------------------------------------------------------------------
+blocked_schemes:
+  - mailto
+  - tel
+  - sms
+  - javascript
+  - data
+  - ftp
+  - file
+  - callto
+  - skype
+  - whatsapp
+
+# ---------------------------------------------------------------------------
+# Path segments that disqualify a URL outright.  Matched against individual
+# lowercased path segments unless listed under `path_substrings`.
+# ---------------------------------------------------------------------------
+blocked_path_segments:
+  # authentication / account
+  - login
+  - log-in
+  - signin
+  - sign-in
+  - signup
+  - sign-up
+  - register
+  - registration
+  - password
+  - reset-password
+  - forgot-password
+  - logout
+  - account
+  - my-account
+  - myaccount
+  - profile
+  - dashboard
+  - admin
+  - administrator
+  - portal
+  # commerce
+  - cart
+  - basket
+  - checkout
+  - order
+  - orders
+  - payment
+  - billing
+  - invoice
+  # legal / policy
+  - privacy
+  - privacy-policy
+  - terms
+  - terms-of-service
+  - terms-and-conditions
+  - tos
+  - legal
+  - disclaimer
+  - imprint
+  - impressum
+  - cookie
+  - cookies
+  - cookie-policy
+  - gdpr
+  - ccpa
+  - dsar
+  - accessibility
+  - modern-slavery
+  # site plumbing
+  - search
+  - feed
+  - rss
+  - atom
+  - sitemap
+  - wp-admin
+  - wp-json
+  - wp-content
+  - wp-includes
+  - xmlrpc
+  - cdn-cgi
+  - tag
+  - tags
+  - category
+  - categories
+  - author
+  - archive
+  - archives
+  - page
+  - amp
+  # careers detail pages (the overview page is allowed -- see SS7)
+  - jobs
+  - job
+  - positions
+  - position
+  - openings
+  - opening
+  - vacancies
+  - vacancy
+  - apply
+  - application
+  - job-application
+
+path_substrings:
+  - /wp-admin/
+  - /wp-json/
+  - /cdn-cgi/
+  - /.well-known/
+  - /feed/
+  - /amp/
+
+# Careers overview paths are allowed at low weight, but only as a single path
+# segment: /careers is allowed, /careers/senior-engineer is not (SS7).
+careers_overview_segments:
+  - careers
+  - career
+  - culture
+  - our-culture
+  - join-us
+  - join-our-team
+  - work-with-us
+  - why-work-here
+careers_overview_prefixes:
+  - life-at
+  - working-at
+  - life-at-
+  - working-at-
+
+# ---------------------------------------------------------------------------
+# File extensions that are never fetched.
+# ---------------------------------------------------------------------------
+blocked_extensions:
+  - pdf
+  - doc
+  - docx
+  - xls
+  - xlsx
+  - ppt
+  - pptx
+  - odt
+  - rtf
+  - zip
+  - rar
+  - 7z
+  - tar
+  - gz
+  - dmg
+  - exe
+  - msi
+  - pkg
+  - apk
+  - jpg
+  - jpeg
+  - png
+  - gif
+  - svg
+  - webp
+  - avif
+  - ico
+  - bmp
+  - tiff
+  - mp4
+  - mp3
+  - wav
+  - avi
+  - mov
+  - webm
+  - m4v
+  - ogg
+  - css
+  - js
+  - mjs
+  - json
+  - xml
+  - rss
+  - txt
+  - csv
+  - woff
+  - woff2
+  - ttf
+  - eot
+  - map
+
+# ---------------------------------------------------------------------------
+# Third-party domains that must never be followed.  These are already excluded
+# by registrable-domain scope enforcement; they are listed explicitly so the
+# intent is auditable and so discovery can drop them before scoring.
+# ---------------------------------------------------------------------------
+blocked_domains:
+  # social
+  - linkedin.com
+  - facebook.com
+  - twitter.com
+  - x.com
+  - instagram.com
+  - youtube.com
+  - youtu.be
+  - tiktok.com
+  - pinterest.com
+  - reddit.com
+  - threads.net
+  - medium.com
+  - github.com
+  - vimeo.com
+  # directories / review sites / data vendors
+  - crunchbase.com
+  - g2.com
+  - capterra.com
+  - trustpilot.com
+  - glassdoor.com
+  - indeed.com
+  - clutch.co
+  - yelp.com
+  - bbb.org
+  - owler.com
+  - zoominfo.com
+  - apollo.io
+  # applicant tracking systems
+  - greenhouse.io
+  - lever.co
+  - workable.com
+  - bamboohr.com
+  - ashbyhq.com
+  - smartrecruiters.com
+  - myworkdayjobs.com
+  - workday.com
+  - icims.com
+  - jobvite.com
+  - recruitee.com
+  - teamtailor.com
+  - personio.de
+  - breezy.hr
+  - rippling.com
+  - jazzhr.com
+  # scheduling / misc embeds
+  - calendly.com
+  - hubspot.com
+  - eventbrite.com
+  - typeform.com
+
+# ---------------------------------------------------------------------------
+# Subdomain tiers (SS6).  Matched against the leftmost subdomain label.
+# ---------------------------------------------------------------------------
+subdomains:
+  primary:
+    - ""
+    - www
+  content:
+    - solutions
+    - products
+    - product
+    - industries
+    - work
+    - cases
+    - casestudies
+    - case-studies
+    - partners
+    - services
+  low_value:
+    - blog
+    - news
+    - press
+    - events
+    - community
+    - forum
+    - forums
+    - docs
+    - documentation
+    - developer
+    - developers
+    - shop
+    - store
+    - learn
+    - academy
+  excluded:
+    - mail
+    - webmail
+    - smtp
+    - imap
+    - pop
+    - login
+    - auth
+    - sso
+    - id
+    - account
+    - accounts
+    - app
+    - apps
+    - my
+    - portal
+    - dashboard
+    - admin
+    - status
+    - cdn
+    - static
+    - assets
+    - img
+    - images
+    - media
+    - files
+    - download
+    - downloads
+    - support
+    - help
+    - helpdesk
+    - ticket
+    - tickets
+    - careers
+    - jobs
+    - hire
+    - hiring
+    - recruiting
+    - track
+    - tracking
+    - link
+    - links
+    - go
+    - email
+    - e
+    - m
+    - mobile
+    - api
+    - staging
+    - dev
+    - test
+    - demo
+    - vpn
+    - git
+    - jenkins
+    - grafana
+
+# Locale prefixes recognised in paths and subdomains.  Non-matching locales are
+# penalised so a translated site cannot consume the page budget.
+locale_codes:
+  - en
+  - en-us
+  - en-gb
+  - en-au
+  - en-ca
+  - de
+  - de-de
+  - fr
+  - fr-fr
+  - es
+  - es-es
+  - es-mx
+  - it
+  - pt
+  - pt-br
+  - nl
+  - sv
+  - no
+  - da
+  - fi
+  - pl
+  - cs
+  - ru
+  - tr
+  - ja
+  - ko
+  - zh
+  - zh-cn
+  - zh-tw
+  - ar
+  - he
+  - hi
+  - uk
+  - ro
+  - hu
+  - el
+  - th
+  - vi
+  - id
+  - ms
+
+# ---------------------------------------------------------------------------
+# Tracking parameters stripped during URL normalization (SS6).
+# ---------------------------------------------------------------------------
+tracking_params:
+  - utm_source
+  - utm_medium
+  - utm_campaign
+  - utm_term
+  - utm_content
+  - utm_id
+  - utm_source_platform
+  - utm_creative_format
+  - utm_marketing_tactic
+  - gclid
+  - gbraid
+  - wbraid
+  - dclid
+  - fbclid
+  - msclkid
+  - twclid
+  - ttclid
+  - li_fat_id
+  - igshid
+  - mc_cid
+  - mc_eid
+  - _hsenc
+  - _hsmi
+  - hsa_acc
+  - hsa_cam
+  - hsa_grp
+  - hsa_ad
+  - hsa_src
+  - hsa_tgt
+  - hsa_kw
+  - hsa_mt
+  - hsa_net
+  - hsa_ver
+  - ref
+  - referrer
+  - source
+  - campaign
+  - yclid
+  - vero_id
+  - s_kwcid
+  - ef_id
+  - trk
+  - trkCampaign
+
+# Index filenames dropped during normalization.
+index_filenames:
+  - index.html
+  - index.htm
+  - index.php
+  - index.asp
+  - index.aspx
+  - index.jsp
+  - default.html
+  - default.htm
+  - default.asp
+  - default.aspx
+  - home.html

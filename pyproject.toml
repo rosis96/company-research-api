@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "company-research-api"
+version = "1.0.0"
+description = "First-party company website research API for GPT Actions"
+requires-python = ">=3.12"
+
+[tool.setuptools.packages.find]
+include = ["app*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+filterwarnings = ["ignore::DeprecationWarning"]
+addopts = "-q --strict-markers"
+markers = [
+    "renderer: requires a working Playwright installation",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+ignore = [
+    "B008",   # FastAPI's Depends() in defaults is the documented pattern
+    "E501",   # line length is handled by the formatter
+    # The rules below are style preferences that make cleanup paths less clear
+    # in this codebase, where "best effort, never raise" is deliberate:
+    "SIM105", # try/except/pass reads better than contextlib.suppress in teardown
+    "SIM102", # nested ifs are kept where each condition documents a distinct rule
+    "SIM108", # ternaries hurt readability in the URL-coercion branches
+    "B007",   # unused loop variables in getaddrinfo tuple unpacking
+]

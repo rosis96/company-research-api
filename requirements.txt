@@ -1,0 +1,14 @@
+fastapi>=0.115
+uvicorn[standard]>=0.32
+pydantic>=2.9
+pydantic-settings>=2.6
+httpx[http2]>=0.27
+httpcore>=1.0.9
+selectolax>=0.3.21
+trafilatura>=1.12
+tldextract>=5.1
+playwright>=1.48
+redis>=5.2
+structlog>=24.4
+PyYAML>=6.0
+anyio>=4.6

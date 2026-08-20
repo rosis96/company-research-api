@@ -1,0 +1,124 @@
+# Crawl budgets per research_depth preset.
+#
+# Architecture reference: SS13.  These are the numbers that keep a request
+# inside the GPT Actions limits of 45 seconds round trip and 100,000 characters
+# of response payload.  The `standard` column is the approved default.
+#
+# Bump CRA_CONFIG_VERSION when changing these -- cached results were produced
+# under the previous budgets.
+
+version: 1
+
+presets:
+  quick:
+    deadline_ms: 18000
+    max_pages: 5
+    max_depth: 1
+    max_renders: 1
+    max_renders_js_mode: 2
+    http_concurrency_per_host: 3
+    render_concurrency: 1
+    connect_timeout_s: 4.0
+    read_timeout_s: 6.0
+    total_timeout_s: 8.0
+    render_timeout_ms: 6000
+    max_response_bytes: 2097152
+    page_content_cap_top: 5000
+    page_content_cap_rest: 3500
+    page_content_cap_top_ranks: 3
+    global_content_budget: 25000
+    sitemap_url_cap: 500
+    min_words_keep_page: 40
+    min_score_select: 30
+    js_mode_max_pages: 3
+
+  standard:
+    deadline_ms: 32000
+    max_pages: 11
+    max_depth: 2
+    max_renders: 3
+    max_renders_js_mode: 6
+    http_concurrency_per_host: 4
+    render_concurrency: 2
+    connect_timeout_s: 5.0
+    read_timeout_s: 8.0
+    total_timeout_s: 12.0
+    render_timeout_ms: 8000
+    max_response_bytes: 2097152
+    page_content_cap_top: 8000
+    page_content_cap_rest: 5000
+    page_content_cap_top_ranks: 3
+    global_content_budget: 60000
+    sitemap_url_cap: 2000
+    min_words_keep_page: 40
+    min_score_select: 25
+    js_mode_max_pages: 6
+
+  deep:
+    deadline_ms: 38000
+    max_pages: 16
+    max_depth: 2
+    max_renders: 5
+    max_renders_js_mode: 8
+    http_concurrency_per_host: 4
+    render_concurrency: 2
+    connect_timeout_s: 5.0
+    read_timeout_s: 8.0
+    total_timeout_s: 12.0
+    render_timeout_ms: 10000
+    max_response_bytes: 3145728
+    page_content_cap_top: 8000
+    page_content_cap_rest: 5000
+    page_content_cap_top_ranks: 3
+    global_content_budget: 75000
+    sitemap_url_cap: 3000
+    min_words_keep_page: 40
+    min_score_select: 15
+    js_mode_max_pages: 8
+
+# ---------------------------------------------------------------------------
+# Content sufficiency thresholds (SS4).  A 200 response is not enough; these
+# word counts are what decides whether the browser fallback is needed.
+# ---------------------------------------------------------------------------
+sufficiency:
+  min_words_homepage: 200
+  min_words_internal: 120
+
+# ---------------------------------------------------------------------------
+# Evidence sufficiency gate (SS11).
+# ---------------------------------------------------------------------------
+evidence:
+  multi_page_min_pages: 2
+  multi_page_min_words: 300
+  single_page_min_words: 500
+
+# ---------------------------------------------------------------------------
+# Thin-site blog fallback trigger (SS7).  All conditions must hold.
+# ---------------------------------------------------------------------------
+thin_site_fallback:
+  enabled: true
+  max_pages_scraped: 3        # fires when pages_scraped < this
+  min_total_words: 400        # or total_words < this
+  min_remaining_ms: 6000
+  stale_after_months: 18
+
+# ---------------------------------------------------------------------------
+# Cross-page boilerplate removal (SS8).
+# ---------------------------------------------------------------------------
+boilerplate:
+  min_pages: 4
+  document_frequency: 0.6
+  max_block_chars: 400        # long shared blocks are kept in place
+  site_wide_content_cap: 1500
+
+# ---------------------------------------------------------------------------
+# Response shaping (SS10).
+# ---------------------------------------------------------------------------
+response:
+  max_headings: 8
+  max_heading_chars: 60
+  organization_cap_chars: 500
+  jsonld_description_cap: 300
+  metadata_share_limit: 0.10
+  metadata_assert_min_content: 10000
+  hard_payload_chars: 100000

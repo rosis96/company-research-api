@@ -1,0 +1,64 @@
+# TLS termination and edge policy.
+#
+# GPT Actions require TLS 1.2+ on port 443 with a valid public certificate, so a
+# real domain is a prerequisite rather than a later step (SS14).  Caddy obtains
+# and renews the certificate automatically.
+
+{
+	email {$ACME_EMAIL}
+	servers {
+		protocols h1 h2
+	}
+}
+
+{$DOMAIN} {
+	encode gzip
+
+	# There is no legitimate large request to this API: the body is a URL and
+	# three small options.
+	request_body {
+		max_size 8KB
+	}
+
+	# Coarse edge limiting.  Per-key limiting happens in the application, which
+	# is the only layer that knows which key a request belongs to.
+	rate_limit {
+		zone edge {
+			key {remote_host}
+			events 240
+			window 1m
+		}
+	}
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "no-referrer"
+		-Server
+	}
+
+	# The upstream deadline is 32s for the standard preset; allow headroom for
+	# assembly and serialisation but stay well inside the 45s GPT Actions
+	# timeout so a stuck upstream fails here rather than at ChatGPT.
+	reverse_proxy api:8000 {
+		transport http {
+			read_timeout 42s
+			write_timeout 42s
+			dial_timeout 5s
+		}
+		header_up X-Forwarded-Proto {scheme}
+		header_up X-Real-IP {remote_host}
+	}
+
+	log {
+		output stdout
+		format json
+	}
+}
+
+# Note: the rate_limit directive requires the caddy-ratelimit module. If you are
+# running the stock caddy:2-alpine image, either build a custom image with
+#   xcaddy build --with github.com/mholt/caddy-ratelimit
+# or delete the rate_limit block above and rely on the application-level limiter
+# plus your provider's edge protection.

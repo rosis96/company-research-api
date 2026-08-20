@@ -1,0 +1,369 @@
+# Concept lexicon, ranking weights and category quotas.
+#
+# Architecture reference: SS7.  Every tunable ranking value lives here rather
+# than in application code, so ranking behaviour can be changed without touching
+# the crawler.  Bump CRA_CONFIG_VERSION whenever this file changes, otherwise
+# cached results computed under the old weights will be served (SS14).
+
+version: 1
+
+# ---------------------------------------------------------------------------
+# Concept clusters.  `terms` are matched against normalized URL path tokens and
+# against normalized anchor text.  Matching is variant-tolerant: tokens are
+# lowercased, split on / - _ . and whitespace, and crudely singularized, so
+# "case-studies", "Case Study" and "/case_studies/" all match `case-study`.
+# ---------------------------------------------------------------------------
+concepts:
+  - key: case_study
+    weight: 100
+    category: case_study_detail
+    index_type: case_study_index
+    detail_type: case_study
+    index_category: case_study_index
+    hub: true
+    terms:
+      - case-study
+      - case-studie
+      - casestudy
+      - success-story
+      - success-storie
+      - client-story
+      - client-storie
+      - customer-story
+      - customer-storie
+      - client-success
+      - customer-success-story
+
+  - key: work
+    weight: 90
+    category: case_study_detail
+    index_type: portfolio
+    detail_type: case_study
+    index_category: case_study_index
+    hub: true
+    terms:
+      - our-work
+      - work
+      - portfolio
+      - project
+      - result
+      - showcase
+      - deployment
+      - selected-work
+
+  - key: services
+    weight: 85
+    category: offering
+    index_type: services
+    detail_type: service_detail
+    index_category: offering
+    hub: true
+    terms:
+      - service
+      - what-we-do
+      - capability
+      - offering
+      - expertise
+      - specialtie
+      - specialty
+      - discipline
+      - our-service
+
+  - key: solutions
+    weight: 80
+    category: offering
+    index_type: solutions
+    detail_type: service_detail
+    index_category: offering
+    hub: true
+    terms:
+      - solution
+      - use-case
+      - application
+
+  - key: products
+    weight: 80
+    category: offering
+    index_type: products
+    detail_type: product_detail
+    index_category: offering
+    hub: true
+    terms:
+      - product
+      - platform
+      - software
+      - technology
+      - feature
+      - our-product
+
+  - key: industries
+    weight: 75
+    category: industries
+    index_type: industries
+    detail_type: industries
+    index_category: industries
+    hub: true
+    terms:
+      - industrie
+      - industry
+      - sector
+      - market
+      - vertical
+      - who-we-serve
+      - who-we-help
+      - clients-we-serve
+      - markets-we-serve
+
+  - key: customers
+    weight: 70
+    category: customers
+    index_type: customers
+    detail_type: customers
+    index_category: customers
+    hub: false
+    terms:
+      - customer
+      - client
+      - our-client
+      - our-customer
+      - brands-we-work-with
+      - partner
+
+  - key: testimonials
+    weight: 65
+    category: customers
+    index_type: testimonials
+    detail_type: testimonials
+    index_category: customers
+    hub: false
+    terms:
+      - testimonial
+      - review
+      - what-clients-say
+      - client-feedback
+
+  - key: about
+    weight: 60
+    category: about
+    index_type: about
+    detail_type: about
+    index_category: about
+    hub: false
+    terms:
+      - about
+      - about-u
+      - our-story
+      - company
+      - mission
+      - value
+      - why-u
+      - why-choose-u
+      - overview
+      - history
+      - who-we-are
+
+  - key: pricing
+    weight: 55
+    category: pricing
+    index_type: pricing
+    detail_type: pricing
+    index_category: pricing
+    hub: false
+    terms:
+      - pricing
+      - price
+      - plan
+      - package
+      - rate
+      - cost
+      - investment
+
+  - key: process
+    weight: 50
+    category: process
+    index_type: process
+    detail_type: process
+    index_category: process
+    hub: false
+    terms:
+      - approach
+      - process
+      - how-it-work
+      - methodology
+      - framework
+      - our-way
+      - our-process
+
+  - key: careers
+    weight: 40
+    category: careers
+    index_type: careers_overview
+    detail_type: careers_overview
+    index_category: careers
+    hub: false          # never expanded into wave 2 (SS7)
+    single_segment_only: true
+    terms:
+      - career
+      - culture
+      - our-culture
+      - life-at
+      - working-at
+      - join-u
+      - join-our-team
+      - work-with-u
+      - why-work-here
+
+  - key: team
+    weight: 35
+    category: other
+    index_type: team
+    detail_type: team
+    index_category: other
+    hub: false
+    terms:
+      - team
+      - leadership
+      - our-people
+      - founder
+      - our-team
+
+  - key: contact
+    weight: 25
+    category: other
+    index_type: contact
+    detail_type: contact
+    index_category: other
+    hub: false
+    terms:
+      - contact
+      - get-in-touch
+      - location
+      - office
+
+  - key: resources
+    weight: 20
+    category: other
+    index_type: resource
+    detail_type: resource
+    index_category: other
+    hub: false
+    terms:
+      - resource
+      - guide
+      - whitepaper
+      - ebook
+      - webinar
+      - insight
+
+  # Blog/news scores low and is excluded from normal selection entirely.
+  # It is only ever reachable through the thin-site fallback (SS7).
+  - key: blog
+    weight: 8
+    category: blog
+    index_type: blog_index
+    detail_type: blog_post
+    index_category: blog
+    hub: false
+    terms:
+      - blog
+      - news
+      - article
+      - press
+      - update
+      - post
+
+# ---------------------------------------------------------------------------
+# Structural bonuses (SS7 table B)
+# ---------------------------------------------------------------------------
+structural:
+  region_nav: 20          # link in <nav> or <header>
+  region_main: 5          # link in <main> or article body
+  region_footer: -10      # footer-only link
+  path_depth_1: 10
+  path_depth_2: 4
+  path_depth_4_plus: -10
+  in_sitemap: 5
+  linked_from_many: 8     # linked from >= `linked_from_many_threshold` pages
+  linked_from_many_threshold: 3
+  recent_lastmod: 3
+  recent_lastmod_months: 12
+  hub_inheritance_ratio: 0.6
+
+# ---------------------------------------------------------------------------
+# Penalties (SS7 table C)
+# ---------------------------------------------------------------------------
+penalties:
+  date_in_path: -40
+  query_string: -8
+  long_path: -10
+  long_path_chars: 80
+  locale_mismatch: -45
+  soft_noise: -20
+  subdomain_content: -15
+  subdomain_low_value: -40
+
+soft_noise_terms:
+  - event
+  - webinar
+  - podcast
+  - newsletter
+  - award
+  - sponsor
+  - conference
+  - tradeshow
+
+# ---------------------------------------------------------------------------
+# Selection quotas (SS7, "the diversity pass").  `target` is filled first in
+# listed order; leftover budget then goes to the highest remaining scores up to
+# `max`.
+# ---------------------------------------------------------------------------
+quotas:
+  - category: offering
+    target: 2
+    max: 3
+  - category: case_study_detail
+    target: 2
+    max: 3
+  - category: about
+    target: 1
+    max: 2
+  - category: industries
+    target: 1
+    max: 1
+  - category: customers
+    target: 1
+    max: 1
+  - category: case_study_index
+    target: 1
+    max: 1
+  - category: pricing
+    target: 1
+    max: 1
+  - category: process
+    target: 0
+    max: 1
+  - category: careers
+    target: 0
+    max: 1
+  - category: blog
+    target: 0
+    max: 1
+  - category: other
+    target: 0
+    max: 2
+
+# Categories that may only be selected by the thin-site fallback, never by the
+# normal selection pass.
+fallback_only_categories:
+  - blog
+
+# Minimum score a candidate needs before it is worth a page slot at all.
+min_score_default: 25
+
+# Hard cap on pages whose locale does not match the requested URL's locale.
+# The -45 score penalty deprioritises them, but on a small site there can still
+# be budget left over after the primary-locale pages are exhausted, and SS6 is
+# explicit that a translated site must not consume the page budget with
+# duplicate content in twelve languages.  One is enough to show the site is
+# localised; more is waste.
+max_locale_mismatch_pages: 1
