@@ -577,3 +577,123 @@ async def test_no_llm_or_external_calls_happen(orchestrator, fixture_servers) ->
 
     for name, srv in others.items():
         assert srv.requests == [], f"{name} was contacted"
+
+
+# ---------------------------------------------------------------------------
+# 9. A homepage that refuses the HTTP client but serves a browser
+# ---------------------------------------------------------------------------
+#
+# A 403 used to end the crawl on the spot: zero pages, in about 400ms, with the
+# browser sitting unused. Plenty of "blocks" are not decisions about us -- a WAF
+# fingerprinting the TLS handshake or the header set refuses httpx and serves a
+# real Chromium the page. So a blocked homepage now gets one browser attempt.
+
+
+def _forbidden_renderer(html: str):
+    class EscalationRenderer(NullRenderer):
+        def __init__(self) -> None:
+            self.calls: list[str] = []
+
+        @property
+        def available(self) -> bool:
+            return True
+
+        async def render(self, url, *, scope, timeout_ms):
+            self.calls.append(url)
+            return RenderResult(ok=True, html=html, final_url=url, status_code=200)
+
+    return EscalationRenderer()
+
+
+BROWSER_HTML = (
+    "<html lang='en'><head><title>Forbidden Ltd | Home</title></head><body>"
+    "<nav><a href='/services'>Services</a></nav>"
+    "<main><h1>Forbidden Ltd</h1><p>" + ("word " * 400) + "</p></main></body></html>"
+)
+
+
+async def test_a_403_homepage_is_retried_through_the_browser(
+    guard, fetcher, fixture_servers
+) -> None:
+    renderer = _forbidden_renderer(BROWSER_HTML)
+    orchestrator = ResearchOrchestrator(
+        guard, fetcher, renderer, RobotsPolicy(RobotsSettings(), fetcher)
+    )
+    result = await run(orchestrator, fixture_servers["forbidden"].url("/"))
+
+    assert renderer.calls, "the browser was never given a turn"
+    assert result.status in ("success", "partial")
+    assert result.pages
+    assert result.pages[0].word_count > 200
+
+
+async def test_the_escalation_is_noted_in_the_response(
+    guard, fetcher, fixture_servers
+) -> None:
+    """Invariant 5: nothing about how the evidence was obtained is hidden."""
+    orchestrator = ResearchOrchestrator(
+        guard, fetcher, _forbidden_renderer(BROWSER_HTML), RobotsPolicy(RobotsSettings(), fetcher)
+    )
+    result = await run(orchestrator, fixture_servers["forbidden"].url("/"))
+    assert any("browser" in note for note in result.notes), result.notes
+
+
+async def test_a_403_still_fails_honestly_when_the_browser_cannot_help(
+    guard, fetcher, fixture_servers
+) -> None:
+    """No renderer, or a renderer that also gets nowhere, must not invent success."""
+    orchestrator = ResearchOrchestrator(
+        guard, fetcher, NullRenderer(), RobotsPolicy(RobotsSettings(), fetcher)
+    )
+    result = await run(orchestrator, fixture_servers["forbidden"].url("/"))
+
+    assert result.status == "failed"
+    assert result.status_reason == str(ReasonCode.BOT_BLOCKED)
+    assert result.pages == []
+    assert result.evidence_sufficient is False
+
+
+async def test_escalation_can_be_switched_off(guard, fetcher, fixture_servers) -> None:
+    renderer = _forbidden_renderer(BROWSER_HTML)
+    orchestrator = ResearchOrchestrator(
+        guard,
+        fetcher,
+        renderer,
+        RobotsPolicy(RobotsSettings(), fetcher),
+        escalate_render_on_block=False,
+    )
+    result = await run(orchestrator, fixture_servers["forbidden"].url("/"))
+
+    assert renderer.calls == []
+    assert result.status == "failed"
+    assert result.status_reason == str(ReasonCode.BOT_BLOCKED)
+
+
+async def test_robots_disallow_is_never_escalated(guard, fetcher, fixture_servers) -> None:
+    """A site that says "do not crawl" is obeyed, not routed around.
+
+    The escalation exists for refusals that are about transport fingerprints.
+    A robots.txt disallow is an explicit instruction from the site owner, and
+    the browser must never be used to get past it.
+    """
+    renderer = _forbidden_renderer(BROWSER_HTML)
+    orchestrator = ResearchOrchestrator(
+        guard, fetcher, renderer, RobotsPolicy(RobotsSettings(), fetcher)
+    )
+    result = await run(orchestrator, fixture_servers["blocked"].url("/"))
+
+    assert renderer.calls == []
+    assert result.status == "failed"
+    assert result.status_reason == str(ReasonCode.ROBOTS_DISALLOWED)
+
+
+async def test_a_dead_domain_does_not_waste_a_render(guard, fetcher, fixture_servers) -> None:
+    """Only outright blocks escalate; DNS and TLS failures fail again in Chromium."""
+    renderer = _forbidden_renderer(BROWSER_HTML)
+    orchestrator = ResearchOrchestrator(
+        guard, fetcher, renderer, RobotsPolicy(RobotsSettings(), fetcher)
+    )
+    result = await run(orchestrator, "https://no-such-host.public.test/")
+
+    assert renderer.calls == []
+    assert result.status == "failed"

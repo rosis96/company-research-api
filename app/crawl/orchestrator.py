@@ -122,12 +122,15 @@ class ResearchOrchestrator:
         renderer: Renderer,
         robots: RobotsPolicy,
         limits: Limits | None = None,
+        *,
+        escalate_render_on_block: bool = True,
     ) -> None:
         self.guard = guard
         self.fetcher = fetcher
         self.renderer = renderer
         self.robots = robots
         self.limits = limits or get_limits()
+        self.escalate_render_on_block = escalate_render_on_block
 
     # ------------------------------------------------------------------
 
@@ -234,10 +237,31 @@ class ResearchOrchestrator:
             max_bytes=state.budget.max_response_bytes,
         )
         if not outcome.ok:
-            state.failures.append(outcome.failure)
-            return None
+            # A refused homepage used to end the crawl here, which meant the
+            # browser we already ship never got a turn.  Many "blocks" are not
+            # decisions about *us* at all: they are TLS or header fingerprint
+            # checks that an HTTP client fails and a real Chromium passes, or a
+            # JavaScript challenge that only executes in a browser.  So a
+            # blocked seed is escalated once to the renderer before the site is
+            # written off (SS5).
+            #
+            # The renderer keeps the same honest User-Agent, so this evades
+            # nothing that identifies us.  A site that blocks the name
+            # CompanyResearchBot still blocks it here, and correctly so.
+            rendered = None
+            if self._should_escalate(outcome.failure):
+                rendered = await self._render(seed_url, state, scope=None)
+            if rendered is None:
+                state.failures.append(outcome.failure)
+                return None
+            state.note(
+                f"homepage returned {outcome.failure.status_code or 'a block'} to the "
+                "HTTP client and was read with the browser instead"
+            )
+            result = rendered
+        else:
+            result = outcome.result
 
-        result = outcome.result
         verdict = assess(
             result.html,
             is_homepage=True,
@@ -252,7 +276,11 @@ class ResearchOrchestrator:
             return None
 
         if not verdict.sufficient:
-            rendered = await self._render(result.final_url, state, scope=None)
+            rendered = (
+                None
+                if result.method is FetchMethod.BROWSER
+                else await self._render(result.final_url, state, scope=None)
+            )
             if rendered is None:
                 reason = (
                     ReasonCode.BOT_BLOCKED
@@ -597,6 +625,19 @@ class ResearchOrchestrator:
     # ------------------------------------------------------------------
     # Render
     # ------------------------------------------------------------------
+
+    def _should_escalate(self, failure: FetchFailure) -> bool:
+        """Is this refusal worth one browser attempt?
+
+        Only an outright block. A DNS failure, a TLS failure or a timeout will
+        fail again in Chromium and would spend a render budget slot to learn
+        nothing.
+        """
+        return (
+            self.escalate_render_on_block
+            and failure is not None
+            and failure.reason == ReasonCode.BOT_BLOCKED
+        )
 
     async def _render(
         self, url: str, state: CrawlState, *, scope: CrawlScope | None

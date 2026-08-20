@@ -95,6 +95,11 @@ class RendererSettings(BaseModel):
 
     enabled: bool = True
     recycle_after_renders: int = 200
+    #: Retry a homepage through the browser when the HTTP client is refused
+    #: (401/403/407/429).  The browser keeps the same honest User-Agent, so this
+    #: only recovers sites whose block is a TLS or header fingerprint check, or a
+    #: JavaScript challenge -- not sites that have blocked us by name.
+    escalate_on_block: bool = True
     #: Point at a pre-installed Chromium instead of Playwright's managed
     #: download.  Needed when the image ships a browser whose build number does
     #: not match the installed Playwright package.

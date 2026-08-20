@@ -164,6 +164,7 @@ class ResearchService:
                     self.renderer,
                     RobotsPolicy(robots_settings, fetcher),
                     self.limits,
+                    escalate_render_on_block=self.settings.renderer.escalate_on_block,
                 )
                 result = await orchestrator.run(
                     payload, request_id=request_id, budget=budget

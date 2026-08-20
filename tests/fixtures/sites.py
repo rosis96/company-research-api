@@ -8,6 +8,7 @@
 6. robots Disallow: /       -- blanket disallow
 7. thin one-page site       -- triggers the blog fallback
 8. locale-duplicated site   -- the same content in six languages
+9. fingerprint-blocked site -- 403 to the HTTP client, readable in a browser
 """
 
 from __future__ import annotations
@@ -536,6 +537,28 @@ def _locale_routes() -> dict[str, Route]:
 LOCALE_SITE = SiteSpec(host="localesite.com", routes=_locale_routes())
 
 
+# ---------------------------------------------------------------------------
+# 9. HTTP 403 to the plain client, readable in a browser
+# ---------------------------------------------------------------------------
+#
+# The shape a WAF produces when it fingerprints the TLS handshake or the header
+# set rather than reading the User-Agent: the HTTP client is refused outright,
+# while a real browser is served the page.  robots.txt is deliberately served
+# normally, because a WAF blocking page requests does not usually block it.
+
+FORBIDDEN_SITE = SiteSpec(
+    host="forbiddensite.com",
+    routes={
+        "/robots.txt": Route(
+            body="User-agent: *\nAllow: /\n", content_type="text/plain"
+        ),
+        "/": Route(body="<html><body>Forbidden</body></html>", status=403),
+        "/services": Route(body="<html><body>Forbidden</body></html>", status=403),
+    },
+    default_status=403,
+)
+
+
 ALL_SITES = {
     "static": STATIC_SITE,
     "spa": SPA_SITE,
@@ -545,6 +568,7 @@ ALL_SITES = {
     "leaky": LEAKY_SITE,
     "slow": SLOW_SITE,
     "blocked": BLOCKED_SITE,
+    "forbidden": FORBIDDEN_SITE,
     "partial_robots": PARTIAL_ROBOTS_SITE,
     "thin": THIN_SITE,
     "locale": LOCALE_SITE,
