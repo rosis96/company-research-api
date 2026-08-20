@@ -10,3 +10,4 @@ htmlcov/
 # transient transfer artefact
 .job-404-fix.tgz
 .schema-v2.tgz
+.single-action.tgz

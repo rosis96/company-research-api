@@ -27,16 +27,34 @@ def spec() -> dict:
     return build("https://research.example.com")
 
 
-def test_exactly_the_four_gpt_actions_are_exposed(spec: dict) -> None:
-    """research plus the three batch-job actions -- nothing else."""
-    assert set(spec["paths"]) == {
+@pytest.fixture(scope="module")
+def batch_spec() -> dict:
+    return build("https://research.example.com", include_batch=True)
+
+
+def test_one_action_is_exposed_by_default(spec: dict) -> None:
+    """One synchronous call per company -- the shape WebPilot uses.
+
+    Handing a GPT the job endpoints asks it to run a state machine across
+    several turns: create, remember an id, poll, paginate. Observed behaviour was
+    that it abandons the machine on the first error and fabricates "research
+    unavailable" rows for the whole list. One call per company has no state to
+    lose, so a failure costs exactly one company.
+    """
+    assert set(spec["paths"]) == {"/v1/research"}
+    ids = [op["operationId"] for path in spec["paths"].values() for op in path.values()]
+    assert ids == ["research"]
+
+
+def test_the_batch_actions_are_available_behind_a_flag(batch_spec: dict) -> None:
+    assert set(batch_spec["paths"]) == {
         "/v1/research",
         "/v1/research/jobs",
         "/v1/research/jobs/{job_id}",
         "/v1/research/jobs/{job_id}/results",
     }
     ids = sorted(
-        op["operationId"] for path in spec["paths"].values() for op in path.values()
+        op["operationId"] for path in batch_spec["paths"].values() for op in path.values()
     )
     assert ids == [
         "createResearchJob",
@@ -44,6 +62,13 @@ def test_exactly_the_four_gpt_actions_are_exposed(spec: dict) -> None:
         "getResearchResults",
         "research",
     ]
+
+
+def test_job_schemas_are_dropped_when_the_job_actions_are(spec: dict) -> None:
+    """A schema for an action that is not offered is an invitation to try it."""
+    for orphan in ("JobCreateRequest", "JobCreated", "JobProgress", "JobResultsPage"):
+        assert orphan not in spec["components"]["schemas"], orphan
+    assert "job_id" not in json.dumps(spec)
 
 
 def test_internal_routes_are_not_exposed(spec: dict) -> None:
@@ -246,32 +271,38 @@ def test_every_parameter_tells_the_model_where_the_value_comes_from(spec: dict) 
                 assert len(description) <= MAX_PARAMETER_DESCRIPTION
 
 
-def test_job_id_parameter_forbids_inventing_one(spec: dict) -> None:
-    parameter = spec["paths"]["/v1/research/jobs/{job_id}"]["get"]["parameters"][0]
+def test_job_id_parameter_forbids_inventing_one(batch_spec: dict) -> None:
+    parameter = batch_spec["paths"]["/v1/research/jobs/{job_id}"]["get"]["parameters"][0]
     assert parameter["name"] == "job_id"
     assert "never invent" in parameter["description"].lower()
 
 
-def test_info_description_carries_the_batch_workflow(spec: dict) -> None:
+def test_info_description_tells_the_model_to_loop(spec: dict) -> None:
     """The model reads this before deciding whether to call the action at all."""
-    description = spec["info"]["description"]
-    for expected in (
-        "createResearchJob",
-        "getResearchJob",
-        "getResearchResults",
-        "next_start",
-        "has_more",
-        "input_index",
-        "retry",
-    ):
-        assert expected in description, expected
+    description = spec["info"]["description"].lower()
+    assert "once per company" in description
+    assert "do not skip a company" in description
+    assert "do not batch several urls into one call" in description
+    assert "do not stop early" in description
 
 
 def test_info_description_forbids_filling_gaps_from_memory(spec: dict) -> None:
+    """Invariant 1 stated where the model cannot miss it."""
     description = spec["info"]["description"].lower()
-    assert "never fill a failed row from memory" in description
-    assert "never abandon" in description
+    assert "never fill the gap from memory" in description
+    assert "search engine" in description
+    assert "directory" in description
+    assert "one failed call is never a reason to abandon" in description
+
+
+def test_info_description_gains_the_batch_workflow_behind_the_flag(
+    batch_spec: dict,
+) -> None:
+    description = batch_spec["info"]["description"]
+    for expected in ("createResearchJob", "getResearchJob", "next_start", "has_more"):
+        assert expected in description, expected
 
 
 def test_the_document_stays_small(spec: dict) -> None:
-    assert len(json.dumps(spec)) < 20_000
+    """Half the size of the four-action version, and every byte is load-bearing."""
+    assert len(json.dumps(spec)) < 10_000

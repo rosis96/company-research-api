@@ -14,9 +14,14 @@ This script produces a GPT-facing variant that:
   declare it, and it is already present;
 * gives the operation a short ``operationId`` so the action is named ``research``
   in the GPT rather than ``research_v1_research_post``;
-* strips ``/v1/health``, ``/privacy`` and ``/bot``, exposing exactly four
-  actions: ``research``, ``createResearchJob``, ``getResearchJob`` and
-  ``getResearchResults``;
+* exposes **one action by default**: ``research``.  The batch job endpoints
+  still exist on the API, but handing them to a GPT asks the model to run a
+  three-step state machine -- create a job, carry its id, poll it, paginate the
+  results -- and a language model is a poor state machine.  Every observed
+  failure was the model abandoning that machine partway and inventing "research
+  unavailable" rows.  One synchronous call per company is how WebPilot works,
+  and it has no state to lose.  Pass ``--with-batch`` to expose the job
+  endpoints as well;
 * pins the server URL to the deployment domain;
 * enforces the 300/700-character description limits GPT Actions impose;
 * declares bearer authentication, which is the only auth style that works given
@@ -37,6 +42,7 @@ This script produces a GPT-facing variant that:
 
 Usage:
     python scripts/export_openapi.py https://research.example.com > openapi.gpt-action.json
+    python scripts/export_openapi.py https://research.example.com --with-batch
 """
 
 from __future__ import annotations
@@ -61,33 +67,44 @@ OPENAPI_VERSION = "3.1.1"
 #: the batch workflow explicitly and says what to do on failure -- the GPT's
 #: observed failure mode was one bad call followed by twenty fabricated
 #: "research unavailable" rows.
-INFO_DESCRIPTION = (
+INFO_DESCRIPTION_SINGLE = (
     "Reads a company's own website and returns the cleaned text of its most "
     "relevant pages with source URLs, so copy can be written from evidence "
-    "instead of assumption. Only the company's own domain is crawled. Nothing "
-    "is invented: if a site cannot be read the response says so.\n\n"
-    "One company: call research with the URL.\n\n"
-    "Several companies (2 to 30): call createResearchJob once with every URL in "
-    "the order you want them back. It returns a job_id immediately. Then call "
-    "getResearchJob with that job_id and keep polling, roughly every 10 to 20 "
-    "seconds, until status is \"completed\". Then call getResearchResults with "
-    "the job_id, start=0 and limit=5, and keep calling it with the next_start "
-    "value it gives you until has_more is false. Never ask for more than 10 at "
-    "a time; responses are size limited. Do not re-create the job between "
-    "polls, and do not invent a job_id -- always reuse the one you were given.\n\n"
-    "Reading the results. Every company comes back as its own row carrying "
-    "input_index, so the original order and any duplicate URLs are preserved. A "
-    "row's status is success, partial or failed. Write from the pages in that "
-    "row and cite their url values. A failed row means that one site could not "
-    "be read; report it as such and carry on with the rest. Never fill a failed "
-    "row from memory, from search results, or from any other site.\n\n"
-    "If a call errors, retry it once. A 404 from getResearchJob means that "
-    "job_id has expired or never existed, so create a new job. Never abandon "
-    "the remaining companies because one call failed."
+    "instead of assumption. Only the company's own domain is crawled, and "
+    "nothing is invented: if a site cannot be read, the response says so.\n\n"
+    "How to use it. Call research once per company, with that company's URL. "
+    "For a list of companies, work down the list in the given order and call "
+    "research separately for each one. Do not skip a company, do not batch "
+    "several URLs into one call, and do not stop early. Each call takes a few "
+    "seconds and is independent of the others.\n\n"
+    "Reading the response. status is success, partial or failed. On success or "
+    "partial, write only from the text in pages, and cite the url of the page "
+    "the fact came from. site.site_name and site.tagline are the company's own "
+    "words for itself. coverage.found and coverage.missing say which kinds of "
+    "page were located.\n\n"
+    "When a site cannot be read. status is failed and status_reason says why. "
+    "Report that company as unresearched and move on to the next one. Never "
+    "fill the gap from memory, from a search engine, from a directory, from "
+    "social media, or from anything you know about the company. An honest "
+    "\"could not be read\" is the correct answer; an invented detail is not.\n\n"
+    "If a call errors, retry that one company once, then continue down the "
+    "list. One failed call is never a reason to abandon the remaining "
+    "companies or to answer the whole list from memory."
+)
+
+#: Appended only when the batch job endpoints are exposed (--with-batch).
+INFO_DESCRIPTION_BATCH = (
+    "\n\nLarge lists. For more than about ten companies you may instead call "
+    "createResearchJob once with every URL, in the order you want them back. It "
+    "returns a job_id immediately. Poll getResearchJob with that exact job_id "
+    "every 10 to 20 seconds until status is \"completed\", then read "
+    "getResearchResults with start=0 and limit=5, following next_start until "
+    "has_more is false. Reuse the job_id you were given; never invent one. If "
+    "any of that fails, fall back to calling research once per company."
 )
 
 
-def build(server_url: str) -> dict[str, Any]:
+def build(server_url: str, *, include_batch: bool = False) -> dict[str, Any]:
     settings = Settings(
         api_keys="placeholder:standard",
         environment="development",
@@ -100,13 +117,16 @@ def build(server_url: str) -> dict[str, Any]:
     spec["openapi"] = OPENAPI_VERSION
     spec["servers"] = [{"url": server_url.rstrip("/")}]
     spec["info"]["title"] = "Company Website Research API"
-    spec["info"]["description"] = INFO_DESCRIPTION
+    spec["info"]["description"] = INFO_DESCRIPTION_SINGLE + (
+        INFO_DESCRIPTION_BATCH if include_batch else ""
+    )
 
     # Keep only the actions the GPT may call.
+    exposed = EXPOSED_PATHS if include_batch else SINGLE_ACTION_PATHS
     spec["paths"] = {
         path: operations
         for path, operations in spec["paths"].items()
-        if path in EXPOSED_PATHS
+        if path in exposed
     }
 
     schemas = spec.setdefault("components", {}).setdefault("schemas", {})
@@ -125,6 +145,7 @@ def build(server_url: str) -> dict[str, Any]:
     _flatten_nullable_unions(spec)
     _strip_generated_titles(spec)
     _describe_parameters(spec)
+    _drop_unreferenced_schemas(spec)
     _enforce_description_limits(spec)
 
     # GPT Actions do not support custom headers; bearer is the correct choice.
@@ -168,8 +189,11 @@ OPERATION_IDS = {
     ("/v1/research/jobs/{job_id}/results", "get"): "getResearchResults",
 }
 
-#: Exactly the actions the GPT may call.  Anything else is stripped.
+#: Every action that *may* be exposed.  Anything else is stripped.
 EXPOSED_PATHS = tuple(path for path, _ in OPERATION_IDS)
+
+#: The default: one action, called once per company.
+SINGLE_ACTION_PATHS = ("/v1/research",)
 
 
 def _strip_auth_header_parameters(spec: dict[str, Any]) -> None:
@@ -309,6 +333,35 @@ def _simplify_operation_ids(spec: dict[str, Any]) -> None:
                 operation["operationId"] = OPERATION_IDS[(path, method)]
 
 
+def _drop_unreferenced_schemas(spec: dict[str, Any]) -> None:
+    """Remove component schemas nothing reaches.
+
+    Hiding the job endpoints leaves their request and response models orphaned.
+    They are dead weight in a document the model has to read, and a schema
+    describing an action that is not offered is an invitation to try it.
+    """
+    schemas = spec.get("components", {}).get("schemas", {})
+    reachable: set[str] = set()
+
+    def visit(node: Any) -> None:
+        if isinstance(node, dict):
+            ref = node.get("$ref")
+            if isinstance(ref, str) and ref.startswith("#/components/schemas/"):
+                name = ref.rsplit("/", 1)[-1]
+                if name not in reachable:
+                    reachable.add(name)
+                    visit(schemas.get(name))
+            for value in node.values():
+                visit(value)
+        elif isinstance(node, list):
+            for item in node:
+                visit(item)
+
+    visit(spec["paths"])
+    for name in [n for n in schemas if n not in reachable]:
+        schemas.pop(name)
+
+
 def _strip_dangling_refs(node: Any, removed: set[str]) -> None:
     """Drop any ``$ref`` pointing at a schema that was removed."""
     if isinstance(node, dict):
@@ -353,8 +406,9 @@ def _enforce_description_limits(spec: dict[str, Any]) -> None:
 
 
 def main() -> int:
-    server_url = sys.argv[1] if len(sys.argv) > 1 else "https://research.example.com"
-    spec = build(server_url)
+    args = [a for a in sys.argv[1:] if a != "--with-batch"]
+    server_url = args[0] if args else "https://research.example.com"
+    spec = build(server_url, include_batch="--with-batch" in sys.argv)
     json.dump(spec, sys.stdout, indent=2, ensure_ascii=False)
     sys.stdout.write("\n")
     return 0
