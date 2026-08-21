@@ -13,7 +13,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-SCHEMA_VERSION = "1.1"
+SCHEMA_VERSION = "1.2"
 
 SiteStatus = Literal["success", "partial", "failed"]
 
@@ -82,6 +82,43 @@ class Organization(BaseModel):
         )
 
 
+class SiteSignals(BaseModel):
+    """Firmographic signals read directly off the site, for ICP scoring.
+
+    Every field is observed, never inferred: a technology means the page loaded
+    it, a headcount means the company wrote that number about itself. An absent
+    field means the evidence was not there -- it never means "unknown, guess".
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    technologies: list[str] = Field(default_factory=list)
+    keywords: list[str] = Field(
+        default_factory=list, description="The company's own meta keywords."
+    )
+    industries: list[str] = Field(
+        default_factory=list,
+        description="From the site's own industries pages and JSON-LD, not inferred.",
+    )
+    employee_count: int | None = Field(
+        default=None, description="Only when the site states a headcount."
+    )
+    founded_year: int | None = None
+    country: str | None = None
+
+    def is_empty(self) -> bool:
+        return not any(
+            (
+                self.technologies,
+                self.keywords,
+                self.industries,
+                self.employee_count,
+                self.founded_year,
+                self.country,
+            )
+        )
+
+
 class SiteInfo(BaseModel):
     """Site-level context (SS10)."""
 
@@ -95,6 +132,7 @@ class SiteInfo(BaseModel):
     site_name: str | None = None
     tagline: str | None = None
     organization: Organization | None = None
+    signals: SiteSignals | None = None
     site_wide_content: str | None = Field(
         default=None,
         description=(

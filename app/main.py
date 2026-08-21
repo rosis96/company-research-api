@@ -17,6 +17,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
+from app.api.idempotency import IdempotencyStore
 from app.api.ratelimit import RateLimiter
 from app.api.routes import router
 from app.cache.result_cache import ResultCache
@@ -96,6 +97,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             guard=guard,
             settings=settings.webhooks,
             user_agent=settings.user_agent,
+        )
+        app.state.idempotency = IdempotencyStore(
+            getattr(cache, "_client", None),
+            prefix=settings.cache.key_prefix,
+            ttl_seconds=settings.idempotency.ttl_seconds,
         )
         app.state.job_store = JobStore(
             getattr(cache, "_client", None),

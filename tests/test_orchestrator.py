@@ -269,7 +269,7 @@ async def test_expired_deadline_still_returns_a_valid_response(
 
     assert result.status in ("failed", "partial", "success")
     assert result.request_id == "req_test"
-    assert result.schema_version == "1.1"
+    assert result.schema_version == "1.2"
 
 
 # ---------------------------------------------------------------------------

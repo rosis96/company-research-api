@@ -136,7 +136,9 @@ class ResearchService:
         debug_requested = payload.advanced is not None and payload.advanced.debug
 
         if not payload.force_refresh and not debug_requested:
-            cached = await self.cache.get(key)
+            cached = await self.cache.get(
+                key, max_age_seconds=payload.max_age_seconds
+            )
             if cached is not None:
                 cached.request_id = request_id
                 cached.crawl_summary.cache_hit = True

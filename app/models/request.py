@@ -123,6 +123,23 @@ class ResearchRequest(BaseModel):
             "writer models use better. One format per request."
         ),
     )
+    include_signals: bool = Field(
+        default=False,
+        description=(
+            "Return firmographic signals (technologies, keywords, headcount, "
+            "founded year) for ICP scoring. Off by default: they cost payload "
+            "and only an enrichment pipeline uses them."
+        ),
+    )
+    max_age_seconds: int | None = Field(
+        default=None,
+        ge=0,
+        description=(
+            "Accept a cached result only if it is younger than this. Narrows "
+            "what this caller will accept; it never changes how long anything "
+            "is stored for anyone else."
+        ),
+    )
     force_refresh: bool = Field(
         default=False,
         description="Bypass the cached result for this domain and re-crawl.",

@@ -7,6 +7,8 @@ SS14 (cache, deployment).
 from __future__ import annotations
 
 import hashlib
+import json
+from dataclasses import dataclass
 from functools import lru_cache
 from typing import Literal
 
@@ -46,6 +48,61 @@ class CacheSettings(BaseModel):
     connect_timeout_seconds: float = 1.0
 
 
+@dataclass(frozen=True, slots=True)
+class KeyRecord:
+    """One API key's identity and its limits.
+
+    ``rate_limit_per_minute`` and ``monthly_quota`` of ``None`` mean "use the
+    server default", so a key only carries a number when it genuinely differs.
+    ``label`` names the workspace the key belongs to and appears in logs, never
+    in a response.
+    """
+
+    digest: str
+    scope: str
+    label: str = ""
+    rate_limit_per_minute: int | None = None
+    monthly_quota: int | None = None
+
+    @property
+    def is_advanced(self) -> bool:
+        return self.scope == "advanced"
+
+    @property
+    def short_id(self) -> str:
+        return self.digest[:12]
+
+
+def _key_record(
+    raw_key: str,
+    scope: str,
+    *,
+    label: str = "",
+    rate_limit_per_minute: object = None,
+    monthly_quota: object = None,
+) -> KeyRecord:
+    clean_scope = scope.strip().lower()
+    if clean_scope not in {"standard", "advanced"}:
+        clean_scope = "standard"
+    return KeyRecord(
+        digest=hashlib.sha256(raw_key.encode("utf-8")).hexdigest(),
+        scope=clean_scope,
+        label=label.strip(),
+        rate_limit_per_minute=_positive_or_none(rate_limit_per_minute),
+        monthly_quota=_positive_or_none(monthly_quota),
+    )
+
+
+def _positive_or_none(value: object) -> int | None:
+    if value is None:
+        return None
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        return None
+    return number if number >= 0 else None
+
+
 class ScrapeSettings(BaseModel):
     """Single-URL scrape (POST /v1/scrape).
 
@@ -64,6 +121,17 @@ class ScrapeSettings(BaseModel):
     max_content_chars: int = 120_000
     #: `output_format: html` returns markup, which is far larger than prose.
     max_html_chars: int = 400_000
+
+
+class IdempotencySettings(BaseModel):
+    """Safe retries for POST endpoints.
+
+    Fails open: without Redis the header is ignored and the request runs, which
+    costs a duplicated crawl rather than an outage.
+    """
+
+    enabled: bool = True
+    ttl_seconds: int = 86_400
 
 
 class WebhookSettings(BaseModel):
@@ -210,21 +278,42 @@ class Settings(BaseSettings):
     jobs: JobSettings = Field(default_factory=JobSettings)
     scrape: ScrapeSettings = Field(default_factory=ScrapeSettings)
     webhooks: WebhookSettings = Field(default_factory=WebhookSettings)
+    idempotency: IdempotencySettings = Field(default_factory=IdempotencySettings)
     cache: CacheSettings = Field(default_factory=CacheSettings)
     security: SecuritySettings = Field(default_factory=SecuritySettings)
     renderer: RendererSettings = Field(default_factory=RendererSettings)
 
     # ------------------------------------------------------------------
 
-    def api_key_table(self) -> dict[str, str]:
-        """Return ``{sha256(key): scope}``.
+    def api_key_table(self) -> dict[str, KeyRecord]:
+        """Return ``{sha256(key): KeyRecord}``.
 
-        Keys are hashed at load time so the plaintext never sits in a
-        long-lived structure, and lookups use a constant-time comparison of the
-        digest rather than of the key itself.
+        Two accepted formats:
+
+        * the original ``key:scope,key:scope`` list, which still means exactly
+          what it did;
+        * a JSON array, which additionally carries per-key limits and a label::
+
+              [{"key": "...", "scope": "standard", "label": "revcadence-prod",
+                "rate_limit_per_minute": 600, "monthly_quota": 50000}]
+
+        A positional fifth CSV field was the obvious extension and is
+        deliberately not offered: this value is already the single most
+        error-prone thing in the configuration, and adding two more positions to
+        mis-count would make that worse. Anything past a couple of keys should
+        use the JSON form.
+
+        Keys are hashed at load time so the plaintext never sits in a long-lived
+        structure, and lookups compare digests rather than keys.
         """
-        table: dict[str, str] = {}
-        for entry in self.api_keys.split(","):
+        raw = self.api_keys.strip()
+        if not raw:
+            return {}
+        if raw.startswith("["):
+            return self._api_keys_from_json(raw)
+
+        table: dict[str, KeyRecord] = {}
+        for entry in raw.split(","):
             item = entry.strip()
             if not item:
                 continue
@@ -232,11 +321,30 @@ class Settings(BaseSettings):
                 raw_key, scope = item.rsplit(":", 1)
             else:
                 raw_key, scope = item, "standard"
-            scope = scope.strip().lower()
-            if scope not in {"standard", "advanced"}:
-                scope = "standard"
-            digest = hashlib.sha256(raw_key.strip().encode("utf-8")).hexdigest()
-            table[digest] = scope
+            record = _key_record(raw_key.strip(), scope)
+            table[record.digest] = record
+        return table
+
+    def _api_keys_from_json(self, raw: str) -> dict[str, KeyRecord]:
+        try:
+            entries = json.loads(raw)
+        except ValueError as exc:
+            raise ValueError(f"CRA_API_KEYS is not valid JSON: {exc}") from exc
+        if not isinstance(entries, list):
+            raise ValueError("CRA_API_KEYS JSON must be an array of objects")
+
+        table: dict[str, KeyRecord] = {}
+        for entry in entries:
+            if not isinstance(entry, dict) or not entry.get("key"):
+                raise ValueError("each CRA_API_KEYS entry needs a 'key'")
+            record = _key_record(
+                str(entry["key"]).strip(),
+                str(entry.get("scope", "standard")),
+                label=str(entry.get("label", "")),
+                rate_limit_per_minute=entry.get("rate_limit_per_minute"),
+                monthly_quota=entry.get("monthly_quota"),
+            )
+            table[record.digest] = record
         return table
 
 

@@ -15,13 +15,22 @@ from dataclasses import dataclass
 
 from fastapi import Header, HTTPException, Request, status
 
-from app.config.settings import Settings
+from app.config.settings import KeyRecord, Settings
 
 
 @dataclass(frozen=True, slots=True)
 class ApiKey:
+    """The caller, as resolved from the bearer token.
+
+    Carries the key's own limits so the rate limiter can apply them without a
+    second lookup, and a ``label`` naming the workspace for logs.
+    """
+
     digest: str
     scope: str
+    label: str = ""
+    rate_limit_per_minute: int | None = None
+    monthly_quota: int | None = None
 
     @property
     def is_advanced(self) -> bool:
@@ -46,7 +55,7 @@ async def require_api_key(
 ) -> ApiKey:
     """FastAPI dependency: resolve and validate the caller's API key."""
     settings: Settings = request.app.state.settings
-    table: dict[str, str] = request.app.state.api_key_table
+    table: dict[str, KeyRecord] = request.app.state.api_key_table
 
     if not table:
         # Refusing every request is the right behaviour for a misconfigured
@@ -61,9 +70,15 @@ async def require_api_key(
         raise _unauthorized("expected 'Authorization: Bearer <key>'")
 
     digest = hashlib.sha256(token.strip().encode("utf-8")).hexdigest()
-    for known_digest, scope in table.items():
+    for known_digest, record in table.items():
         if hmac.compare_digest(digest, known_digest):
-            return ApiKey(digest=digest, scope=scope)
+            return ApiKey(
+                digest=digest,
+                scope=record.scope,
+                label=record.label,
+                rate_limit_per_minute=record.rate_limit_per_minute,
+                monthly_quota=record.monthly_quota,
+            )
 
     del settings  # only needed to make the dependency's contract explicit
     raise _unauthorized("invalid API key")

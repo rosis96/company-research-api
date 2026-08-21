@@ -17,10 +17,21 @@ from functools import lru_cache
 from pathlib import Path
 
 import structlog
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
+from fastapi import (
+    APIRouter,
+    Depends,
+    Header,
+    HTTPException,
+    Query,
+    Request,
+    Response,
+    status,
+)
 from fastapi.responses import HTMLResponse
 
 from app.api.auth import ApiKey, require_api_key
+from app.api.idempotency import HEADER as IDEMPOTENCY_HEADER
+from app.api.idempotency import IdempotencyConflict, body_fingerprint
 from app.extract.content import truncate_at_paragraph
 from app.jobs.store import (
     JobMeta,
@@ -113,9 +124,17 @@ async def research(
     request: Request,
     response: Response,
     api_key: ApiKey = Depends(require_api_key),
+    idempotency_key: str | None = Header(default=None, alias=IDEMPOTENCY_HEADER),
 ) -> ResearchResponse:
     state = request.app.state
     request_id = f"req_{uuid.uuid4().hex[:16]}"
+
+    fingerprint, stored = await _replay_or_claim(
+        state, api_key, idempotency_key, payload
+    )
+    if stored is not None:
+        response.headers["X-Idempotent-Replay"] = "true"
+        return ResearchResponse.model_validate(stored)
 
     await _enforce_rate_limit(state, api_key)
 
@@ -125,9 +144,23 @@ async def research(
             detail="advanced options require an advanced-scoped API key",
         )
 
-    outcome = await state.research_service.run(
-        payload, request_id=request_id, key_id=api_key.short_id
-    )
+    try:
+        outcome = await state.research_service.run(
+            payload, request_id=request_id, key_id=api_key.short_id
+        )
+    except Exception:
+        # A failed request stores nothing, so the caller can retry it -- which
+        # is the entire point of retrying.
+        await _release(state, api_key, idempotency_key, fingerprint)
+        raise
+
+    if fingerprint:
+        await state.idempotency.complete(
+            api_key.short_id,
+            idempotency_key,
+            fingerprint,
+            outcome.response.model_dump(mode="json", exclude_none=True),
+        )
     response.headers["X-Cache"] = "HIT" if outcome.cache_hit else "MISS"
     return outcome.response
 
@@ -153,7 +186,9 @@ async def research(
 async def scrape(
     payload: ScrapeRequest,
     request: Request,
+    response: Response,
     api_key: ApiKey = Depends(require_api_key),
+    idempotency_key: str | None = Header(default=None, alias=IDEMPOTENCY_HEADER),
 ) -> ScrapeResponse:
     """One URL in, one page out.
 
@@ -165,11 +200,31 @@ async def scrape(
     if not state.settings.scrape.enabled:
         raise HTTPException(status_code=503, detail="scrape is disabled")
 
+    fingerprint, stored = await _replay_or_claim(
+        state, api_key, idempotency_key, payload
+    )
+    if stored is not None:
+        response.headers["X-Idempotent-Replay"] = "true"
+        return ScrapeResponse.model_validate(stored)
+
     await _enforce_rate_limit(state, api_key)
     request_id = f"scr_{uuid.uuid4().hex[:16]}"
-    return await state.scrape_service.run(
-        payload, request_id=request_id, key_id=api_key.short_id
-    )
+    try:
+        result = await state.scrape_service.run(
+            payload, request_id=request_id, key_id=api_key.short_id
+        )
+    except Exception:
+        await _release(state, api_key, idempotency_key, fingerprint)
+        raise
+
+    if fingerprint:
+        await state.idempotency.complete(
+            api_key.short_id,
+            idempotency_key,
+            fingerprint,
+            result.model_dump(mode="json", exclude_none=True),
+        )
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -193,10 +248,21 @@ async def scrape(
 async def create_research_job(
     payload: JobCreateRequest,
     request: Request,
+    response: Response,
     api_key: ApiKey = Depends(require_api_key),
+    idempotency_key: str | None = Header(default=None, alias=IDEMPOTENCY_HEADER),
 ) -> JobCreated:
     state = request.app.state
     settings = state.settings.jobs
+
+    fingerprint, stored = await _replay_or_claim(
+        state, api_key, idempotency_key, payload
+    )
+    if stored is not None:
+        # Without this, a retried create starts a second crawl of the same 30
+        # companies and the caller ends up with two job ids for one intent.
+        response.headers["X-Idempotent-Replay"] = "true"
+        return JobCreated.model_validate(stored)
 
     await _enforce_rate_limit(state, api_key)
 
@@ -250,8 +316,17 @@ async def create_research_job(
         key_id=api_key.short_id,
         depth=payload.research_depth,
         callback=bool(callback_url),
+        workspace=api_key.label or None,
     )
-    return JobCreated(job_id=job_id, status="queued", total=meta.total)
+    created = JobCreated(job_id=job_id, status="queued", total=meta.total)
+    if fingerprint:
+        await state.idempotency.complete(
+            api_key.short_id,
+            idempotency_key,
+            fingerprint,
+            created.model_dump(mode="json", exclude_none=True),
+        )
+    return created
 
 
 @router.get(
@@ -421,8 +496,40 @@ def _require_diagnostics(state) -> None:
 # ---------------------------------------------------------------------------
 
 
+async def _replay_or_claim(
+    state, api_key: ApiKey, idempotency_key: str | None, payload
+) -> tuple[str | None, dict | None]:
+    """Returns ``(fingerprint, stored_response)``.
+
+    ``fingerprint`` is None when idempotency is not in play for this request, in
+    which case the caller must not try to record a result.
+    """
+    if not idempotency_key or not state.settings.idempotency.enabled:
+        return None, None
+    if not state.idempotency.available:
+        return None, None
+
+    fingerprint = body_fingerprint(payload.model_dump(mode="json"))
+    try:
+        stored = await state.idempotency.begin(
+            api_key.short_id, idempotency_key, fingerprint
+        )
+    except IdempotencyConflict as exc:
+        raise HTTPException(status_code=409, detail=exc.detail) from exc
+    return fingerprint, stored
+
+
+async def _release(state, api_key: ApiKey, idempotency_key, fingerprint) -> None:
+    if fingerprint and idempotency_key:
+        await state.idempotency.release(api_key.short_id, idempotency_key)
+
+
 async def _enforce_rate_limit(state, api_key: ApiKey) -> None:
-    verdict = await state.rate_limiter.check(api_key.short_id)
+    verdict = await state.rate_limiter.check(
+        api_key.short_id,
+        per_minute=api_key.rate_limit_per_minute,
+        monthly_quota=api_key.monthly_quota,
+    )
     if not verdict.allowed:
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,

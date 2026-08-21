@@ -728,7 +728,7 @@ def test_single_research_still_works_unchanged(plain_client, fixture_servers) ->
     )
     assert response.status_code == 200
     body = response.json()
-    assert body["schema_version"] == "1.1"
+    assert body["schema_version"] == "1.2"
     assert body["status"] == "success"
     assert body["pages"]
     assert "input_index" not in body

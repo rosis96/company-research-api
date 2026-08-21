@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import time
 
 import structlog
 
@@ -71,6 +72,17 @@ def ttl_for(response: ResearchResponse, settings: CacheSettings) -> int | None:
     return settings.ttl_failed_transient_seconds
 
 
+def _unwrap(raw: dict) -> tuple[dict, int | None]:
+    """Accept both the envelope and the bare response written before it.
+
+    Entries live for up to fourteen days, so a deploy that changed the shape
+    would otherwise blank the cache for a fortnight.
+    """
+    if isinstance(raw, dict) and "response" in raw and "cached_at" in raw:
+        return raw["response"], int(raw["cached_at"])
+    return raw, None
+
+
 class ResultCache:
     """Thin wrapper over Redis with fail-open semantics."""
 
@@ -103,7 +115,17 @@ class ResultCache:
     def available(self) -> bool:
         return self._client is not None and self._healthy
 
-    async def get(self, key: str) -> ResearchResponse | None:
+    async def get(
+        self, key: str, *, max_age_seconds: int | None = None
+    ) -> ResearchResponse | None:
+        """Read a cached result, optionally refusing one that is too old.
+
+        ``max_age_seconds`` is a *read-side* freshness bound, deliberately, not a
+        caller-supplied TTL. A caller-set TTL would let one integration decide
+        how stale every other integration's reads may be; ``max_age`` only ever
+        narrows what this caller will accept. It is what HTTP does, for the same
+        reason.
+        """
         if not self.available:
             return None
         try:
@@ -115,7 +137,19 @@ class ResultCache:
         if not raw:
             return None
         try:
-            return ResearchResponse.model_validate(json.loads(raw))
+            payload, cached_at = _unwrap(json.loads(raw))
+        except Exception as exc:
+            log.warning("cache.decode_failed", error=str(exc))
+            return None
+
+        if max_age_seconds is not None:
+            # An entry written before envelopes existed has no age. Treating
+            # unknown as "too old" is the conservative reading: the caller asked
+            # for a freshness guarantee we cannot make.
+            if cached_at is None or (time.time() - cached_at) > max_age_seconds:
+                return None
+        try:
+            return ResearchResponse.model_validate(payload)
         except Exception as exc:
             log.warning("cache.decode_failed", error=str(exc))
             return None
@@ -124,7 +158,13 @@ class ResultCache:
         if not self.available or ttl is None or ttl <= 0:
             return
         try:
-            payload = response.model_dump_json(exclude_none=True)
+            payload = json.dumps(
+                {
+                    "cached_at": int(time.time()),
+                    "response": response.model_dump(mode="json", exclude_none=True),
+                },
+                separators=(",", ":"),
+            )
             await self._client.set(key, payload, ex=ttl)  # type: ignore[union-attr]
         except Exception as exc:
             log.warning("cache.set_failed", error=str(exc))
@@ -143,22 +183,26 @@ class InMemoryCache(ResultCache):
 
     def __init__(self, settings: CacheSettings) -> None:
         super().__init__(settings, client=None)
-        self.store: dict[str, tuple[str, int]] = {}
+        self.store: dict[str, tuple[str, int, float]] = {}
 
     @property
     def available(self) -> bool:
         return self.settings.enabled
 
-    async def get(self, key: str) -> ResearchResponse | None:
+    async def get(
+        self, key: str, *, max_age_seconds: int | None = None
+    ) -> ResearchResponse | None:
         entry = self.store.get(key)
         if entry is None:
+            return None
+        if max_age_seconds is not None and (time.time() - entry[2]) > max_age_seconds:
             return None
         return ResearchResponse.model_validate(json.loads(entry[0]))
 
     async def set(self, key: str, response: ResearchResponse, ttl: int | None) -> None:
         if ttl is None or ttl <= 0:
             return
-        self.store[key] = (response.model_dump_json(exclude_none=True), ttl)
+        self.store[key] = (response.model_dump_json(exclude_none=True), ttl, time.time())
 
     async def aclose(self) -> None:
         self.store.clear()

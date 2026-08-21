@@ -29,6 +29,12 @@ from app.extract.boilerplate import remove_boilerplate
 from app.extract.content import extract_content, split_blocks, truncate_at_paragraph
 from app.extract.jsonld import extract_organization, iter_jsonld
 from app.extract.metadata import extract_metadata
+from app.extract.signals import (
+    detect_employee_count,
+    detect_founded_year,
+    detect_keywords,
+    detect_technologies,
+)
 from app.fetch.host_limiter import HostLimiter
 from app.fetch.http import HTML_TYPES, TEXT_TYPES, HttpFetcher
 from app.fetch.renderer import Renderer
@@ -49,6 +55,7 @@ from app.models.response import (
     PageResult,
     ResearchResponse,
     SiteInfo,
+    SiteSignals,
 )
 from app.security.reasons import ReasonCode
 from app.security.url_guard import CrawlScope, GuardError, UrlGuard, coerce_input_url
@@ -84,6 +91,8 @@ class CrawlState:
     #: keep links in markdown mode; it changes nothing else about the crawl.
     output_format: str = "text"
     renders_used: int = 0
+    homepage_technologies: list[str] = field(default_factory=list)
+    homepage_keywords: list[str] = field(default_factory=list)
     pages: list[ExtractedPage] = field(default_factory=list)
     failures: list[FetchFailure] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
@@ -176,6 +185,12 @@ class ResearchOrchestrator:
                 failure.reason if failure else ReasonCode.CONNECTION_FAILED,
                 state,
             )
+
+        # Technology and keyword fingerprints are read here, while the markup is
+        # still in hand. Only the short results are kept on the state -- holding
+        # a homepage of HTML for the whole crawl to read it later would be waste.
+        state.homepage_technologies = detect_technologies(seed_result.html)
+        state.homepage_keywords = detect_keywords(seed_result.html)
 
         # Scope is established once, from the homepage's final URL, then frozen.
         # This must happen before the homepage is extracted, because link
@@ -629,6 +644,30 @@ class ResearchOrchestrator:
             discovered_via=candidate.discovered_via,
         )
 
+    def _signals(self, state: CrawlState, organization) -> SiteSignals | None:
+        """Firmographic signals, all read off pages already fetched.
+
+        Costs one pass over markup we are holding anyway -- no extra requests,
+        no extra deadline pressure, and nothing that could fail the crawl.
+        """
+        text = " ".join(page.text for page in state.pages[:4])
+        industries: list[str] = []
+        for page in state.pages:
+            if page.page_type in ("industries",):
+                industries.extend(h for h in page.headings if 2 <= len(h.split()) <= 6)
+
+        signals = SiteSignals(
+            technologies=list(state.homepage_technologies),
+            keywords=list(state.homepage_keywords),
+            industries=industries[:12],
+            employee_count=detect_employee_count(text),
+            founded_year=detect_founded_year(text),
+            # Organization carries free-text locations rather than a country
+            # code; the first is the registered address and is the useful one.
+            country=(organization.locations[0] if organization and organization.locations else None),
+        )
+        return None if signals.is_empty() else signals
+
     # ------------------------------------------------------------------
     # Render
     # ------------------------------------------------------------------
@@ -889,7 +928,13 @@ class ResearchOrchestrator:
                 "deadline" if state.deadline.expired else "candidates_exhausted"
             )
 
-        site = self._build_site(request, state, homepage, cleaned.site_wide_content)
+        site = self._build_site(
+            request,
+            state,
+            homepage,
+            cleaned.site_wide_content,
+            want_signals=getattr(request, "include_signals", False),
+        )
         total_words = sum(p.word_count for p in kept)
         evidence = self._evidence_sufficient(len(kept), total_words)
 
@@ -1009,6 +1054,8 @@ class ResearchOrchestrator:
         state: CrawlState,
         homepage: ExtractedPage,
         site_wide_content: str | None,
+        *,
+        want_signals: bool = False,
     ) -> SiteInfo:
         response_cfg = self.limits.response
         documents: list[dict] = []
@@ -1041,6 +1088,7 @@ class ResearchOrchestrator:
             site_name=site_name,
             tagline=tagline,
             organization=organization if organization and not organization.is_empty() else None,
+            signals=self._signals(state, organization) if want_signals else None,
             site_wide_content=site_wide_content,
         )
 

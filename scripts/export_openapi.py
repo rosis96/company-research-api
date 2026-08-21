@@ -138,6 +138,10 @@ def build(server_url: str, *, include_batch: bool = False) -> dict[str, Any]:
     # basis for preferring markdown, and the GPT path is budgeted in characters
     # where markdown costs roughly double for the same prose.
     request_schema.get("properties", {}).pop("output_format", None)
+    request_schema.get("properties", {}).pop("max_age_seconds", None)
+    request_schema.get("properties", {}).pop("include_signals", None)
+    schemas.get("SiteInfo", {}).get("properties", {}).pop("signals", None)
+    schemas.pop("SiteSignals", None)
     schemas.pop("AdvancedOptions", None)
     schemas.pop("AdvancedOptions-Input", None)
 
@@ -182,9 +186,6 @@ PARAMETER_DESCRIPTIONS = {
     ),
 }
 
-#: Header parameters GPT Actions provide themselves and warn about if declared.
-AUTH_HEADER_NAMES = {"authorization", "x-api-key", "api-key"}
-
 #: Short, stable operation ids, so the GPT calls the action by a readable name.
 OPERATION_IDS = {
     ("/v1/research", "post"): "research",
@@ -201,11 +202,13 @@ SINGLE_ACTION_PATHS = ("/v1/research",)
 
 
 def _strip_auth_header_parameters(spec: dict[str, Any]) -> None:
-    """Drop declared auth headers; authentication is expressed by securitySchemes.
+    """Drop **every** header parameter from the model-facing document.
 
-    Leaving these in produces the ChatGPT import warning "parameter authorization
-    has location header; ignoring" -- harmless but noisy, and it implies the model
-    should supply the header, which it must not.
+    GPT Actions do not support custom headers at all, so a declared one is at
+    best noise ("parameter authorization has location header; ignoring") and at
+    worst an instruction the model cannot follow. Authorization is expressed by
+    securitySchemes; Idempotency-Key is a server-to-server concern the model has
+    no part in.
     """
     for operations in spec["paths"].values():
         for operation in operations.values():
@@ -215,12 +218,7 @@ def _strip_auth_header_parameters(spec: dict[str, Any]) -> None:
             if not parameters:
                 continue
             kept = [
-                parameter
-                for parameter in parameters
-                if not (
-                    parameter.get("in") == "header"
-                    and str(parameter.get("name", "")).lower() in AUTH_HEADER_NAMES
-                )
+                parameter for parameter in parameters if parameter.get("in") != "header"
             ]
             if kept:
                 operation["parameters"] = kept

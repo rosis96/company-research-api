@@ -43,19 +43,37 @@ class RateLimiter:
         self._local: dict[str, deque[float]] = {}
         self._local_monthly: dict[str, int] = {}
 
-    async def check(self, key_id: str, *, now: float | None = None) -> RateLimitVerdict:
+    async def check(
+        self,
+        key_id: str,
+        *,
+        now: float | None = None,
+        per_minute: int | None = None,
+        monthly_quota: int | None = None,
+    ) -> RateLimitVerdict:
+        """Apply this key's limits, falling back to the server defaults.
+
+        A per-key value of 0 means "no limit" and is honoured as such, which is
+        why the override is ``None``-checked rather than truthiness-checked: a
+        deliberate 0 must not silently fall back to the default.
+        """
         now = now if now is not None else time.time()
-        if self.per_minute > 0:
-            verdict = await self._check_window(key_id, now)
+        effective_minute = self.per_minute if per_minute is None else per_minute
+        effective_quota = self.monthly_quota if monthly_quota is None else monthly_quota
+
+        if effective_minute > 0:
+            verdict = await self._check_window(key_id, now, effective_minute)
             if not verdict.allowed:
                 return verdict
-        if self.monthly_quota > 0:
-            return await self._check_quota(key_id, now)
+        if effective_quota > 0:
+            return await self._check_quota(key_id, now, effective_quota)
         return RateLimitVerdict(allowed=True)
 
     # ------------------------------------------------------------------
 
-    async def _check_window(self, key_id: str, now: float) -> RateLimitVerdict:
+    async def _check_window(
+        self, key_id: str, now: float, limit: int
+    ) -> RateLimitVerdict:
         if self._redis is not None:
             try:
                 redis_key = f"{self._prefix}:rl:{key_id}:{int(now // 60)}"
@@ -63,7 +81,7 @@ class RateLimiter:
                 pipe.incr(redis_key)
                 pipe.expire(redis_key, 120)
                 count, _ = await pipe.execute()
-                if int(count) > self.per_minute:
+                if int(count) > limit:
                     return RateLimitVerdict(
                         allowed=False,
                         retry_after=60 - int(now % 60),
@@ -77,7 +95,7 @@ class RateLimiter:
         cutoff = now - 60
         while window and window[0] < cutoff:
             window.popleft()
-        if len(window) >= self.per_minute:
+        if len(window) >= limit:
             return RateLimitVerdict(
                 allowed=False,
                 retry_after=max(1, int(60 - (now - window[0]))),
@@ -86,7 +104,9 @@ class RateLimiter:
         window.append(now)
         return RateLimitVerdict(allowed=True)
 
-    async def _check_quota(self, key_id: str, now: float) -> RateLimitVerdict:
+    async def _check_quota(
+        self, key_id: str, now: float, limit: int
+    ) -> RateLimitVerdict:
         period = time.strftime("%Y%m", time.gmtime(now))
         if self._redis is not None:
             try:
@@ -95,7 +115,7 @@ class RateLimiter:
                 pipe.incr(redis_key)
                 pipe.expire(redis_key, 40 * 86400)
                 count, _ = await pipe.execute()
-                if int(count) > self.monthly_quota:
+                if int(count) > limit:
                     return RateLimitVerdict(
                         allowed=False, retry_after=3600, reason="monthly quota exceeded"
                     )
@@ -106,7 +126,7 @@ class RateLimiter:
         local_key = f"{key_id}:{period}"
         used = self._local_monthly.get(local_key, 0) + 1
         self._local_monthly[local_key] = used
-        if used > self.monthly_quota:
+        if used > limit:
             return RateLimitVerdict(
                 allowed=False, retry_after=3600, reason="monthly quota exceeded"
             )

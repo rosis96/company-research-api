@@ -211,7 +211,7 @@ def test_rate_limit_returns_429_with_retry_after(guard, fixture_servers) -> None
 def test_response_matches_the_v1_1_schema(client, fixture_servers) -> None:
     body = post(client, fixture_servers["static"].url("/")).json()
 
-    assert body["schema_version"] == "1.1"
+    assert body["schema_version"] == "1.2"
     assert set(body) <= {
         "schema_version",
         "request_id",
@@ -382,6 +382,8 @@ def test_request_schema_has_no_numeric_crawl_knobs(client) -> None:
             "focus",
             "force_refresh",
             "output_format",
+            "include_signals",
+            "max_age_seconds",
             "advanced",
         }
 
