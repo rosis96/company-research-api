@@ -134,6 +134,10 @@ def build(server_url: str, *, include_batch: bool = False) -> dict[str, Any]:
     # Remove the advanced options from the model-facing contract entirely.
     request_schema = schemas.get("ResearchRequest", {})
     request_schema.get("properties", {}).pop("advanced", None)
+    # Server callers choose a content format; the model must not. It has no
+    # basis for preferring markdown, and the GPT path is budgeted in characters
+    # where markdown costs roughly double for the same prose.
+    request_schema.get("properties", {}).pop("output_format", None)
     schemas.pop("AdvancedOptions", None)
     schemas.pop("AdvancedOptions-Input", None)
 

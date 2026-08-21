@@ -80,6 +80,9 @@ class CrawlState:
     budget: CrawlBudget
     scope: CrawlScope | None = None
     js_mode: bool = False
+    #: Content shape the caller asked for. Threaded through so extraction can
+    #: keep links in markdown mode; it changes nothing else about the crawl.
+    output_format: str = "text"
     renders_used: int = 0
     pages: list[ExtractedPage] = field(default_factory=list)
     failures: list[FetchFailure] = field(default_factory=list)
@@ -142,7 +145,11 @@ class ResearchOrchestrator:
         budget: CrawlBudget | None = None,
     ) -> ResearchResponse:
         budget = budget or self.limits.budget(request.research_depth)
-        state = CrawlState(deadline=Deadline(total_ms=budget.deadline_ms), budget=budget)
+        state = CrawlState(
+            deadline=Deadline(total_ms=budget.deadline_ms),
+            budget=budget,
+            output_format=getattr(request, "output_format", "text"),
+        )
 
         try:
             seed_raw = coerce_input_url(request.url)
@@ -691,7 +698,9 @@ class ResearchOrchestrator:
             max_headings=int(response_cfg["max_headings"]),
             max_heading_chars=int(response_cfg["max_heading_chars"]),
         )
-        text = await extract_content(result.html, result.final_url)
+        text = await extract_content(
+            result.html, result.final_url, output_format=state.output_format
+        )
         if not text.strip():
             return None
 

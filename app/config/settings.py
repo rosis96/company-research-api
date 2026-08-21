@@ -46,6 +46,50 @@ class CacheSettings(BaseModel):
     connect_timeout_seconds: float = 1.0
 
 
+class ScrapeSettings(BaseModel):
+    """Single-URL scrape (POST /v1/scrape).
+
+    ``/v1/research`` crawls a whole domain; this fetches exactly the URL it is
+    given. It exists for the two cases the crawler is wrong for: the caller
+    already knows the page, and the caller needs an answer in seconds.
+    """
+
+    enabled: bool = True
+    #: Default wall-clock budget. A plain HTTP page lands well inside this; a
+    #: browser render adds 1.5-3s, which is why `render` is a caller choice.
+    default_deadline_ms: int = 8_000
+    max_deadline_ms: int = 30_000
+    #: Ceiling on returned content. Server callers are not bound by the GPT
+    #: Actions 100k limit, so this is generous, but it is not unbounded.
+    max_content_chars: int = 120_000
+    #: `output_format: html` returns markup, which is far larger than prose.
+    max_html_chars: int = 400_000
+
+
+class WebhookSettings(BaseModel):
+    """Outbound callbacks for batch jobs.
+
+    A caller-supplied URL that the server POSTs to is a classic SSRF pivot, so
+    every callback target goes through the same guard as a crawl target. Every
+    delivery is signed, so the receiver can prove the call came from here.
+    """
+
+    enabled: bool = True
+    #: HMAC-SHA256 key. Callbacks are refused when this is unset: an unsigned
+    #: webhook is one anybody can forge.
+    signing_secret: str = ""
+    timeout_seconds: float = 5.0
+    max_attempts: int = 3
+    retry_backoff_seconds: float = 1.0
+    #: When set, callback URLs must be on one of these hosts. Empty means any
+    #: host that passes the SSRF guard.
+    allowed_hosts: tuple[str, ...] = ()
+    #: Callbacks carry the *event* by default, not the evidence: the receiver
+    #: fetches results from the results endpoint. Thirty companies of full
+    #: evidence is a lot of large POSTs with partial-delivery problems.
+    include_results: bool = False
+
+
 class JobSettings(BaseModel):
     """Batch research jobs (SS14).
 
@@ -164,6 +208,8 @@ class Settings(BaseSettings):
 
     robots: RobotsSettings = Field(default_factory=RobotsSettings)
     jobs: JobSettings = Field(default_factory=JobSettings)
+    scrape: ScrapeSettings = Field(default_factory=ScrapeSettings)
+    webhooks: WebhookSettings = Field(default_factory=WebhookSettings)
     cache: CacheSettings = Field(default_factory=CacheSettings)
     security: SecuritySettings = Field(default_factory=SecuritySettings)
     renderer: RendererSettings = Field(default_factory=RendererSettings)

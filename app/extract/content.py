@@ -77,8 +77,12 @@ _TRAILING_WS = re.compile(r"[ \t]+(\n|$)")
 _PUNCT_ONLY = re.compile(r"^[\W_]{1,3}$")
 
 
-async def extract_content(html: str, url: str) -> str:
-    """Extract readable main content as markdown-ish text.
+async def extract_content(html: str, url: str, *, output_format: str = "text") -> str:
+    """Extract readable main content.
+
+    ``text`` is the shipped behaviour and is unchanged: prose with headings kept
+    as ``##`` markers and links flattened away. ``markdown`` keeps the links,
+    which writer models use well and which preserves where a claim pointed.
 
     Falls back to a DOM heuristic when trafilatura under-extracts, which it can
     do on short marketing pages -- it is tuned for articles.
@@ -86,7 +90,8 @@ async def extract_content(html: str, url: str) -> str:
     if not html or not html.strip():
         return ""
 
-    primary = await anyio.to_thread.run_sync(_trafilatura_extract, html, url)
+    links = output_format == "markdown"
+    primary = await anyio.to_thread.run_sync(_trafilatura_extract, html, url, links)
     if primary and count_words(primary) >= FALLBACK_WORD_THRESHOLD:
         return normalize_text(primary)
 
@@ -96,7 +101,7 @@ async def extract_content(html: str, url: str) -> str:
     return normalize_text(primary or fallback)
 
 
-def _trafilatura_extract(html: str, url: str) -> str:
+def _trafilatura_extract(html: str, url: str, links: bool = False) -> str:
     try:
         return (
             trafilatura.extract(
@@ -105,7 +110,7 @@ def _trafilatura_extract(html: str, url: str) -> str:
                 output_format="markdown",
                 include_comments=False,
                 include_tables=True,
-                include_links=False,
+                include_links=links,
                 include_images=False,
                 include_formatting=True,
                 favor_precision=False,
@@ -199,6 +204,28 @@ def _structured_text(container) -> str:
         seen.add(key)
         deduped.append(part)
     return "\n\n".join(deduped)
+
+
+def extract_html(html: str, *, limit: int) -> str:
+    """The pruned main-content markup, for callers that want to parse it.
+
+    Chrome is removed the same way ``_dom_extract`` removes it, so this is the
+    same region of the page the text came from -- not the whole document. Markup
+    is several times the size of the prose it carries, hence the hard limit.
+    """
+    if not html or not html.strip():
+        return ""
+    try:
+        tree = LexborHTMLParser(html)
+        for tag in _STRIP_TAGS:
+            for node in tree.css(tag):
+                node.decompose()
+        container = tree.css_first("main") or tree.css_first("article") or tree.body
+        markup = container.html if container is not None else html
+    except Exception as exc:  # pragma: no cover - selectolax is defensive
+        log.debug("html_extract.failed", error=str(exc))
+        markup = html
+    return (markup or "")[:limit]
 
 
 def normalize_text(text: str) -> str:

@@ -54,6 +54,38 @@ class AdvancedOptions(BaseModel):
     debug: bool = False
 
 
+#: Content shape returned to the caller. One per request, never several:
+#: markdown is roughly twice the size of the same prose, and returning both
+#: doubles the payload for no gain.
+OutputFormat = Literal["text", "markdown", "html"]
+
+#: How hard to try to get content. `never` is the fast path -- a browser render
+#: costs 1.5-3s, which is most of a real-time budget.
+RenderMode = Literal["never", "auto", "always"]
+
+
+class ScrapeRequest(BaseModel):
+    """Fetch exactly one URL. No discovery, no ranking, no domain crawl."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    url: str = Field(description="The exact page to fetch.")
+    output_format: OutputFormat = Field(default="text")
+    render: RenderMode = Field(
+        default="auto",
+        description=(
+            "never: HTTP only, fastest, a JS-only page comes back too_thin. "
+            "auto: render when the page is too thin to be useful. "
+            "always: render unconditionally."
+        ),
+    )
+    deadline_ms: int | None = Field(
+        default=None, ge=500, le=60_000,
+        description="Wall-clock budget. Capped by the server's max_deadline_ms.",
+    )
+    force_refresh: bool = Field(default=False)
+
+
 class ResearchRequest(BaseModel):
     """One company website to research."""
 
@@ -82,6 +114,13 @@ class ResearchRequest(BaseModel):
         description=(
             "Optional bias toward particular page types. Does not restrict the "
             "crawl to only those types."
+        ),
+    )
+    output_format: OutputFormat = Field(
+        default="text",
+        description=(
+            "text returns prose; markdown keeps links and structure, which "
+            "writer models use better. One format per request."
         ),
     )
     force_refresh: bool = Field(

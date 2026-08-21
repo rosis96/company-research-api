@@ -55,10 +55,14 @@ class JobRunner:
         service: ResearchService,
         store: JobStore,
         concurrency: int = 5,
+        webhooks=None,
+        include_results_in_callbacks: bool = False,
     ) -> None:
         self.service = service
         self.store = store
         self.concurrency = max(1, concurrency)
+        self.webhooks = webhooks
+        self.include_results_in_callbacks = include_results_in_callbacks
         self._tasks: set[asyncio.Task] = set()
 
     # ------------------------------------------------------------------
@@ -125,6 +129,8 @@ class JobRunner:
                     else:
                         meta.failed += 1
                 await self.store.save(meta)
+            for row in rows:
+                await self._notify(meta, "company.completed", row)
 
         await asyncio.gather(
             *(process(indices) for indices in groups.values()), return_exceptions=True
@@ -149,6 +155,8 @@ class JobRunner:
         meta.finished_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
         await self.store.save(meta)
 
+        await self._notify(meta, "job.completed", None)
+
         log.info(
             "job.completed",
             job_id=meta.job_id,
@@ -158,6 +166,48 @@ class JobRunner:
             failed=meta.failed,
             elapsed_ms=int((time.monotonic() - started) * 1000),
         )
+
+    async def _notify(self, meta: JobMeta, event: str, row: JobResultRow | None) -> None:
+        """Tell the caller something finished.
+
+        Never raises and never blocks the job: results are already durable in
+        Redis, so a callback that cannot be delivered costs the receiver a poll,
+        not the data.
+        """
+        if not meta.callback_url or self.webhooks is None or not self.webhooks.available:
+            return
+
+        data: dict = {
+            "job_id": meta.job_id,
+            "status": meta.status,
+            "total": meta.total,
+            "completed": meta.completed,
+        }
+        if row is not None:
+            data.update(
+                input_index=row.input_index,
+                requested_url=row.requested_url,
+                canonical_domain=row.canonical_domain,
+                result_status=row.status,
+                status_reason=row.status_reason,
+            )
+            if self.include_results_in_callbacks:
+                data["result"] = row.model_dump(exclude_none=True)
+        else:
+            data.update(
+                successful=meta.successful, partial=meta.partial, failed=meta.failed
+            )
+
+        try:
+            await self.webhooks.deliver(meta.callback_url, event, data)
+        except Exception as exc:  # pragma: no cover - dispatcher is defensive
+            log.warning(
+                "job.callback_failed",
+                job_id=meta.job_id,
+                hook_event=event,
+                error=str(exc) or repr(exc),
+                error_type=type(exc).__name__,
+            )
 
     async def _research_one(self, url: str) -> ResearchResponse:
         """One company, fully isolated. Never raises."""

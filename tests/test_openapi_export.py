@@ -115,6 +115,21 @@ def test_no_numeric_crawl_knobs_are_exposed(spec: dict) -> None:
     assert set(properties) == {"url", "research_depth", "focus", "force_refresh"}
 
 
+def test_output_format_is_hidden_from_the_model(spec: dict) -> None:
+    """Server callers pick a content format; the model has no basis to.
+
+    Markdown is roughly twice the characters for the same prose, and the GPT
+    path is budgeted in characters.
+    """
+    properties = spec["components"]["schemas"]["ResearchRequest"]["properties"]
+    assert "output_format" not in properties
+
+
+def test_scrape_is_not_a_gpt_action(spec: dict) -> None:
+    """/v1/scrape is a server endpoint. The GPT gets one action, research."""
+    assert "/v1/scrape" not in spec["paths"]
+
+
 def test_endpoint_description_within_the_limit(spec: dict) -> None:
     description = spec["paths"]["/v1/research"]["post"]["description"]
     assert 0 < len(description) <= MAX_ENDPOINT_DESCRIPTION

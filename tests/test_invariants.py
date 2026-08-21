@@ -230,7 +230,10 @@ def test_no_unbounded_sleeps_or_retry_loops_in_the_crawler() -> None:
 
 def test_no_module_bypasses_the_guard_with_a_raw_http_client() -> None:
     """Only the fetch layer may construct an HTTP client."""
-    allowed = {"fetch/http.py", "security/transport.py"}
+    # jobs/webhook.py is allowed *only* because it drives the same
+    # GuardedTransport with an explicitly pinned address. The test below fails
+    # if it ever stops doing so.
+    allowed = {"fetch/http.py", "security/transport.py", "jobs/webhook.py"}
     pattern = re.compile(r"httpx\.AsyncClient|requests\.(get|post)|urlopen|aiohttp\.")
     for path in PY_FILES:
         relative = str(path.relative_to(APP_DIR))
@@ -475,3 +478,18 @@ def test_lexicon_and_limits_are_loaded_from_yaml() -> None:
     orchestrator_source = (APP_DIR / "crawl" / "orchestrator.py").read_text()
     assert "self.limits." in orchestrator_source
     assert "state.budget." in orchestrator_source
+
+
+def test_webhook_delivery_uses_the_pinned_transport() -> None:
+    """Outbound callbacks get the same DNS pinning as crawls.
+
+    A caller-supplied callback URL is an SSRF vector, and validating it is only
+    half the job: without pinning, the HTTP client re-resolves the host, and a
+    DNS answer that changes between validation and connect walks past every IP
+    rule. This asserts the dispatcher never falls back to a bare client.
+    """
+    source = (APP_DIR / "jobs" / "webhook.py").read_text()
+    assert "GuardedTransport" in source
+    assert "registry.pin(" in source
+    assert "transport=transport" in source
+    assert "follow_redirects=False" in source

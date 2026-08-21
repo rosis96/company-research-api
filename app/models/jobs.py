@@ -45,6 +45,14 @@ class JobCreateRequest(BaseModel):
     force_refresh: bool = Field(
         default=False, description="Bypass cached results and re-crawl every site."
     )
+    callback_url: str | None = Field(
+        default=None,
+        description=(
+            "HTTPS URL to POST a signed event to as each company finishes and "
+            "when the job completes. The event names the company and its "
+            "outcome; fetch the evidence from the results endpoint."
+        ),
+    )
 
 
 class JobCreated(BaseModel):

@@ -125,6 +125,36 @@ class PageResult(BaseModel):
     content: str
 
 
+class ScrapeResponse(BaseModel):
+    """One page, fetched and cleaned.
+
+    Deliberately flat: a scrape has no coverage, no ranking and no crawl
+    summary, because none of those concepts apply to a single URL. Like every
+    other outcome in this API it reports failure in the body rather than by
+    inventing content.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: str = SCHEMA_VERSION
+    request_id: str
+    status: Literal["success", "partial", "failed"]
+    status_reason: str | None = None
+    url: str
+    final_url: str | None = None
+    title: str | None = None
+    headings: list[str] = Field(default_factory=list)
+    word_count: int = 0
+    output_format: Literal["text", "markdown", "html"] = "text"
+    content: str = ""
+    truncated: bool = False
+    #: "http" or "browser" -- how the bytes were obtained, never hidden.
+    fetch_method: str = "http"
+    elapsed_ms: int = 0
+    cache_hit: bool = False
+    notes: list[str] = Field(default_factory=list)
+
+
 class FailedPage(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

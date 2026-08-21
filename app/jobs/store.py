@@ -53,6 +53,8 @@ class JobMeta:
     created_at: str = ""
     finished_at: str | None = None
     notes: list[str] = field(default_factory=list)
+    #: Validated at job creation. Absent means "poll for results".
+    callback_url: str | None = None
 
     @property
     def total(self) -> int:
@@ -74,6 +76,7 @@ class JobMeta:
                 "created_at": self.created_at,
                 "finished_at": self.finished_at,
                 "notes": self.notes,
+                "callback_url": self.callback_url,
             }
         )
 

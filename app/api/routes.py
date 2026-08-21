@@ -28,6 +28,7 @@ from app.jobs.store import (
     connection_identity,
     server_identity,
 )
+from app.jobs.webhook import WebhookError
 from app.models.jobs import (
     JobCreated,
     JobCreateRequest,
@@ -35,8 +36,13 @@ from app.models.jobs import (
     JobResultRow,
     JobResultsPage,
 )
-from app.models.request import ResearchRequest
-from app.models.response import SCHEMA_VERSION, HealthResponse, ResearchResponse
+from app.models.request import ResearchRequest, ScrapeRequest
+from app.models.response import (
+    SCHEMA_VERSION,
+    HealthResponse,
+    ResearchResponse,
+    ScrapeResponse,
+)
 
 log = structlog.get_logger(__name__)
 
@@ -126,6 +132,46 @@ async def research(
     return outcome.response
 
 
+@router.post(
+    "/v1/scrape",
+    response_model=ScrapeResponse,
+    response_model_exclude_none=True,
+    summary="Fetch one URL",
+    operation_id="scrape",
+    description=(
+        "Fetches exactly one URL and returns its cleaned content. Unlike "
+        "research, it does not crawl the domain. Use it when the page is "
+        "already known, or when an answer is needed in seconds."
+    ),
+    responses={
+        401: {"description": "Missing or invalid API key"},
+        422: {"description": "Malformed request body"},
+        429: {"description": "Rate limit or monthly quota exceeded"},
+        503: {"description": "Scrape is disabled on this server"},
+    },
+)
+async def scrape(
+    payload: ScrapeRequest,
+    request: Request,
+    api_key: ApiKey = Depends(require_api_key),
+) -> ScrapeResponse:
+    """One URL in, one page out.
+
+    Like every crawl outcome this returns HTTP 200 with a ``failed`` status when
+    the page cannot be read (SS9): the caller branches on ``status``, and no
+    consumer is ever handed invented content.
+    """
+    state = request.app.state
+    if not state.settings.scrape.enabled:
+        raise HTTPException(status_code=503, detail="scrape is disabled")
+
+    await _enforce_rate_limit(state, api_key)
+    request_id = f"scr_{uuid.uuid4().hex[:16]}"
+    return await state.scrape_service.run(
+        payload, request_id=request_id, key_id=api_key.short_id
+    )
+
+
 # ---------------------------------------------------------------------------
 # Batch research jobs
 # ---------------------------------------------------------------------------
@@ -171,6 +217,15 @@ async def create_research_job(
             detail="batch jobs require Redis, which is not currently available",
         )
 
+    callback_url: str | None = None
+    if payload.callback_url:
+        # Validated now, not at delivery time: a 422 the caller can act on beats
+        # a job that runs to completion and then silently fails to report.
+        try:
+            callback_url = await state.webhooks.validate_target(payload.callback_url)
+        except WebhookError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
     job_id = f"job_{uuid.uuid4().hex[:16]}"
     meta = JobMeta(
         job_id=job_id,
@@ -179,6 +234,7 @@ async def create_research_job(
         focus=list(payload.focus) if payload.focus else None,
         force_refresh=payload.force_refresh,
         status="queued",
+        callback_url=callback_url,
     )
     try:
         await state.job_store.create(meta)
@@ -193,6 +249,7 @@ async def create_research_job(
         total=meta.total,
         key_id=api_key.short_id,
         depth=payload.research_depth,
+        callback=bool(callback_url),
     )
     return JobCreated(job_id=job_id, status="queued", total=meta.total)
 

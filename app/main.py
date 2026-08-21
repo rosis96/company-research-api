@@ -25,9 +25,11 @@ from app.config.settings import Settings, get_settings
 from app.fetch.renderer import build_renderer
 from app.jobs.runner import JobRunner
 from app.jobs.store import JobStore
+from app.jobs.webhook import WebhookDispatcher
 from app.models.response import ErrorResponse
 from app.observability.logging import configure_logging
 from app.research_service import ResearchService
+from app.scrape_service import ScrapeService
 from app.security.transport import assert_pinning_supported
 from app.security.url_guard import GuardPolicy, UrlGuard
 
@@ -81,6 +83,20 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             limits=limits,
             crawl_semaphore=app.state.crawl_semaphore,
         )
+        # One URL, no crawl. Shares the guard, renderer and limits, so the
+        # security boundary is identical to the crawler's.
+        app.state.scrape_service = ScrapeService(
+            guard=guard,
+            renderer=renderer,
+            settings=settings,
+            limits=limits,
+            semaphore=app.state.crawl_semaphore,
+        )
+        app.state.webhooks = WebhookDispatcher(
+            guard=guard,
+            settings=settings.webhooks,
+            user_agent=settings.user_agent,
+        )
         app.state.job_store = JobStore(
             getattr(cache, "_client", None),
             prefix=settings.cache.key_prefix,
@@ -90,6 +106,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             service=app.state.research_service,
             store=app.state.job_store,
             concurrency=settings.jobs.concurrency,
+            webhooks=app.state.webhooks,
+            include_results_in_callbacks=settings.webhooks.include_results,
         )
         app.state.rate_limiter = RateLimiter(
             per_minute=settings.rate_limit_per_minute,

@@ -376,7 +376,14 @@ def test_request_schema_has_no_numeric_crawl_knobs(client) -> None:
     properties = spec["components"]["schemas"]["ResearchRequest"]["properties"]
     for knob in ("max_pages", "max_depth", "timeout", "max_content_length"):
         assert knob not in properties
-    assert set(properties) == {"url", "research_depth", "focus", "force_refresh", "advanced"}
+    assert set(properties) == {
+            "url",
+            "research_depth",
+            "focus",
+            "force_refresh",
+            "output_format",
+            "advanced",
+        }
 
 
 # ---------------------------------------------------------------------------
