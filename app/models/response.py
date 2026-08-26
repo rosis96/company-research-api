@@ -82,6 +82,30 @@ class Organization(BaseModel):
         )
 
 
+class AdvertisingSignals(BaseModel):
+    """Paid-advertising evidence read off the homepage markup.
+
+    Observed, never inferred, and deliberately never a spend figure: no page on
+    any website states a media budget, so any number here would be generated,
+    not measured. ``score`` is the summed weight of the distinct ad-tag
+    capabilities found (conversion tag = 3, pixel = 2, supporting stack = 1);
+    ``identifiers`` keeps the literal conversion / pixel IDs as stable handles.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    score: int = 0
+    platforms: list[str] = Field(default_factory=list)
+    evidence: list[str] = Field(
+        default_factory=list, description="e.g. 'Google Ads: conversion tracking'."
+    )
+    identifiers: dict[str, str] = Field(default_factory=dict)
+    landing_pages: list[str] = Field(default_factory=list)
+
+    def is_empty(self) -> bool:
+        return not (self.platforms or self.evidence or self.landing_pages)
+
+
 class SiteSignals(BaseModel):
     """Firmographic signals read directly off the site, for ICP scoring.
 
@@ -105,6 +129,9 @@ class SiteSignals(BaseModel):
     )
     founded_year: int | None = None
     country: str | None = None
+    advertising: AdvertisingSignals | None = Field(
+        default=None, description="Paid-advertising evidence; None when nothing was found."
+    )
 
     def is_empty(self) -> bool:
         return not any(
@@ -115,6 +142,7 @@ class SiteSignals(BaseModel):
                 self.employee_count,
                 self.founded_year,
                 self.country,
+                self.advertising is not None and not self.advertising.is_empty(),
             )
         )
 

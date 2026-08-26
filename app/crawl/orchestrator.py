@@ -30,9 +30,11 @@ from app.extract.content import extract_content, split_blocks, truncate_at_parag
 from app.extract.jsonld import extract_organization, iter_jsonld
 from app.extract.metadata import extract_metadata
 from app.extract.signals import (
+    detect_advertising,
     detect_employee_count,
     detect_founded_year,
     detect_keywords,
+    detect_landing_pages,
     detect_technologies,
 )
 from app.fetch.host_limiter import HostLimiter
@@ -49,6 +51,7 @@ from app.models.internal import (
 )
 from app.models.request import ResearchRequest
 from app.models.response import (
+    AdvertisingSignals,
     Coverage,
     CrawlSummary,
     FailedPage,
@@ -93,6 +96,9 @@ class CrawlState:
     renders_used: int = 0
     homepage_technologies: list[str] = field(default_factory=list)
     homepage_keywords: list[str] = field(default_factory=list)
+    #: Paid-advertising fingerprints read off the homepage markup, while it is
+    #: still in hand. Shape: {score, platforms, evidence, identifiers}.
+    homepage_advertising: dict = field(default_factory=dict)
     pages: list[ExtractedPage] = field(default_factory=list)
     failures: list[FetchFailure] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
@@ -191,6 +197,9 @@ class ResearchOrchestrator:
         # a homepage of HTML for the whole crawl to read it later would be waste.
         state.homepage_technologies = detect_technologies(seed_result.html)
         state.homepage_keywords = detect_keywords(seed_result.html)
+        # Advertising evidence is read off the same markup, one extra pass, no
+        # extra fetch. Landing-page paths come later, from the crawled URLs.
+        state.homepage_advertising = detect_advertising(seed_result.html)
 
         # Scope is established once, from the homepage's final URL, then frozen.
         # This must happen before the homepage is extracted, because link
@@ -656,6 +665,13 @@ class ResearchOrchestrator:
             if page.page_type in ("industries",):
                 industries.extend(h for h in page.headings if 2 <= len(h.split()) <= 6)
 
+        # Advertising: homepage tag evidence, plus campaign landing pages found
+        # among the URLs we actually crawled. Emitted only when something was
+        # found, so an absent block reads as "looked, found nothing" downstream.
+        ad = dict(state.homepage_advertising or {})
+        ad["landing_pages"] = detect_landing_pages([p.url for p in state.pages])
+        advertising = AdvertisingSignals(**ad) if ad.get("evidence") or ad.get("landing_pages") else None
+
         signals = SiteSignals(
             technologies=list(state.homepage_technologies),
             keywords=list(state.homepage_keywords),
@@ -665,6 +681,7 @@ class ResearchOrchestrator:
             # Organization carries free-text locations rather than a country
             # code; the first is the registered address and is the useful one.
             country=(organization.locations[0] if organization and organization.locations else None),
+            advertising=advertising,
         )
         return None if signals.is_empty() else signals
 

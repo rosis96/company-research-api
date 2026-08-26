@@ -143,6 +143,121 @@ def detect_keywords(html: str) -> list[str]:
     return seen[:_MAX_PER_LIST]
 
 
+#: Advertising fingerprints, matched against the raw homepage markup (script
+#: hosts, link/iframe srcs, and inline script text). Each row is
+#: ``(kind, needle, platform, weight, capability)`` where ``kind`` is "sub" for
+#: a plain lowercase substring or "re" for a case-insensitive regex.
+#:
+#: Weight is not popularity -- it is how hard the tag is to explain away:
+#:   3 = conversion tracking. Installed for exactly one reason: to let an ad
+#:       platform optimise against a purchase/lead. Nobody adds it speculatively.
+#:   2 = pixel / audience tag. Strongly suggests campaigns, but can outlive them.
+#:   1 = supporting stack. Measurement maturity or paid-attribution software;
+#:       correlates with scale, never proof of spend on its own.
+#: The literal ``AW-`` conversion ID and Meta pixel ID are pulled out separately
+#: as stable, checkable handles (the same ID across two domains = one operator).
+_AD_FINGERPRINTS: tuple[tuple[str, str, str, int, str], ...] = (
+    # weight 3 -- conversion tracking
+    ("sub", "googleadservices.com/pagead/conversion", "Google Ads", 3, "conversion tracking"),
+    ("sub", "/pagead/viewthroughconversion", "Google Ads", 3, "view-through conversion"),
+    ("sub", "google_conversion_id", "Google Ads", 3, "conversion tracking"),
+    ("re", r"gtag\(\s*['\"]config['\"]\s*,\s*['\"]aw-\d{6,}", "Google Ads", 3, "conversion tracking"),
+    ("re", r"fbq\(\s*['\"]track['\"]\s*,\s*['\"]purchase['\"]", "Meta", 3, "purchase conversion event"),
+    # weight 2 -- pixels and audience tags
+    ("sub", "googleads.g.doubleclick.net", "Google Ads", 2, "remarketing tag"),
+    ("sub", "connect.facebook.net", "Meta", 2, "Meta Pixel"),
+    ("sub", "fbevents.js", "Meta", 2, "Meta Pixel"),
+    ("re", r"fbq\(\s*['\"]init['\"]", "Meta", 2, "Meta Pixel"),
+    ("sub", "analytics.tiktok.com", "TikTok", 2, "TikTok Pixel"),
+    ("sub", "ttq.load", "TikTok", 2, "TikTok Pixel"),
+    ("sub", "bat.bing.com", "Microsoft Ads", 2, "UET tag"),
+    ("re", r"\buetq\b", "Microsoft Ads", 2, "UET tag"),
+    ("sub", "snap.licdn.com/li.lms-analytics", "LinkedIn Ads", 2, "Insight Tag"),
+    ("sub", "s.pinimg.com/ct/core.js", "Pinterest Ads", 2, "Pinterest Tag"),
+    ("re", r"pintrk\(", "Pinterest Ads", 2, "Pinterest Tag"),
+    ("sub", "sc-static.net/scevent", "Snapchat Ads", 2, "Snap Pixel"),
+    ("sub", "static.criteo.net", "Criteo", 2, "retargeting tag"),
+    # weight 1 -- supporting stack (attribution software is the best scale proxy)
+    ("sub", "triplewhale", "Triple Whale", 1, "paid attribution platform"),
+    ("sub", "triplepixel", "Triple Whale", 1, "paid attribution platform"),
+    ("sub", "northbeam", "Northbeam", 1, "paid attribution platform"),
+    ("sub", "hyros", "Hyros", 1, "paid attribution platform"),
+    ("sub", "static.klaviyo.com", "Klaviyo", 1, "lifecycle marketing"),
+    ("sub", "cdn.attn.tv", "Attentive", 1, "SMS marketing"),
+    ("re", r"gtm\.js\?id=gtm-[^\"'&]+&gtm_auth", "Server-side GTM", 1, "advanced measurement"),
+)
+
+_AD_REGEXES = {row[1]: re.compile(row[1], re.I) for row in _AD_FINGERPRINTS if row[0] == "re"}
+
+#: Stable identifiers worth keeping: the same handle across two domains means
+#: one operator running both brands.
+_CONVERSION_ID_RE = re.compile(r"AW-\d{6,}", re.I)
+_META_PIXEL_ID_RE = re.compile(r"fbq\(\s*['\"]init['\"]\s*,\s*['\"](\d{6,})['\"]", re.I)
+
+#: Paths that exist only to receive bought traffic. A brochure site has /about
+#: and /contact; a site running campaigns has /lp/spring-sale.
+_LANDING_PATTERNS = ("/lp/", "/offer", "/promo", "/campaign", "/try-", "/free-trial")
+
+
+def detect_advertising(html: str) -> dict:
+    """Read paid-advertising fingerprints off the homepage markup.
+
+    Returns ``{score, platforms, evidence, identifiers, landing_pages}`` -- the
+    shape RevCadence's ``ad_signals.classify`` consumes. ``score`` is the summed
+    weight of the *distinct* capabilities found (fbq init and fbevents.js both
+    prove one Meta Pixel, so they count once), leaving breadth and landing-page
+    bonuses to the consumer. An advertiser nearly always carries this evidence
+    in its own markup, because ad platforms require an on-site tag to attribute
+    conversions. Absence is a finding, not proof: server-side tagging and
+    consent gating hide tags on exactly the biggest advertisers, so a consumer
+    must treat "nothing found" as a ranking signal, never a hard disqualifier.
+    """
+    if not html:
+        return {"score": 0, "platforms": [], "evidence": [], "identifiers": {}, "landing_pages": []}
+    hay = html.lower()
+
+    platforms: list[str] = []
+    evidence: list[str] = []
+    weight_by_evidence: dict[str, int] = {}
+    for kind, needle, platform, weight, capability in _AD_FINGERPRINTS:
+        hit = (needle in hay) if kind == "sub" else bool(_AD_REGEXES[needle].search(html))
+        if not hit:
+            continue
+        label = f"{platform}: {capability}"
+        if label not in weight_by_evidence:  # one Meta Pixel is one, not two
+            weight_by_evidence[label] = weight
+            evidence.append(label)
+        if platform not in platforms:
+            platforms.append(platform)
+
+    identifiers: dict[str, str] = {}
+    conv = _CONVERSION_ID_RE.search(html)
+    if conv:
+        identifiers["google_conversion_id"] = conv.group(0).upper()
+    pixel = _META_PIXEL_ID_RE.search(html)
+    if pixel:
+        identifiers["meta_pixel_id"] = pixel.group(1)
+
+    return {
+        "score": sum(weight_by_evidence.values()),
+        "platforms": platforms,
+        "evidence": evidence,
+        "identifiers": identifiers,
+        "landing_pages": [],  # filled from crawled URLs by detect_landing_pages
+    }
+
+
+def detect_landing_pages(urls: list[str]) -> list[str]:
+    """Campaign landing-page URLs among the pages we crawled. The count is an
+    infrastructure signal (a funded testing programme), never a budget."""
+    out: list[str] = []
+    for url in urls:
+        low = (url or "").lower()
+        if any(p in low for p in _LANDING_PATTERNS) and url not in out:
+            out.append(url)
+    return out[:_MAX_PER_LIST]
+
+
 def detect_employee_count(text: str) -> int | None:
     """A headcount the company states about itself, or nothing."""
     if not text:
