@@ -705,7 +705,15 @@ class ResearchOrchestrator:
     async def _render(
         self, url: str, state: CrawlState, *, scope: CrawlScope | None
     ) -> FetchResult | None:
-        if not self.renderer.available:
+        from app.fetch import scrapingbee
+
+        # ScrapingBee (when configured) is the strongest escalation we have:
+        # residential proxies plus JS rendering in one call, which is what gets
+        # past a datacenter-IP block (HTTP 429/403) and reveals GTM-injected ad
+        # tags. It does not need the local Chromium, so it is tried even when the
+        # built-in renderer is unavailable. Any miss falls through to Chromium.
+        sb_on = scrapingbee.enabled()
+        if not sb_on and not self.renderer.available:
             return None
         if state.renders_used >= state.max_renders:
             return None
@@ -720,6 +728,19 @@ class ResearchOrchestrator:
                 max(1000, state.deadline.remaining_ms - ASSEMBLY_RESERVE_MS),
             )
         )
+        if sb_on:
+            got = await scrapingbee.fetch(url, timeout_ms=timeout)
+            if got and got.get("html") and not looks_parked(got["html"]):
+                return FetchResult(
+                    url=url,
+                    final_url=got.get("final_url") or url,
+                    status_code=got.get("status_code") or 200,
+                    html=got["html"],
+                    method=FetchMethod.BROWSER,
+                )
+            # ScrapingBee missed -- fall through to the built-in browser if present.
+            if not self.renderer.available:
+                return None
         outcome = await self.renderer.render(url, scope=scope, timeout_ms=timeout)
         if not outcome.ok or not outcome.html:
             return None
