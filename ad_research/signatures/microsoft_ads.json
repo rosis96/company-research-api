@@ -1,0 +1,12 @@
+{
+  "key": "microsoft_ads", "display_name": "Microsoft Ads", "category": "advertising",
+  "network": [
+    {"pattern": "bat\\.bing\\.com/action/", "strength": "strong", "label": "Microsoft UET event request"},
+    {"pattern": "bat\\.bing\\.com/bat\\.js", "strength": "medium", "label": "Microsoft UET runtime loaded"}
+  ],
+  "scripts": [{"pattern": "bat\\.bing\\.com/bat\\.js", "strength": "medium", "label": "Microsoft UET script"}],
+  "cookies": [{"pattern": "^(?:_uetmsclkid|_uetsid|_uetvid)$", "strength": "weak", "label": "Microsoft Ads attribution cookie"}],
+  "globals": [{"pattern": "^uetq$", "strength": "medium", "label": "Microsoft UET global"}],
+  "dom": [{"pattern": "bat\\.bing\\.com/bat\\.js|\\buetq\\b", "strength": "medium", "label": "Microsoft UET source marker"}],
+  "identifiers": [{"pattern": "(?i)(?:ti|uetq[^}]{0,100}ti)\\s*[:=]\\s*['\"]?(\\d{5,20})", "strength": "medium", "label": "Microsoft UET tag ID"}]
+}

@@ -1,0 +1,12 @@
+{
+  "key": "linkedin", "display_name": "LinkedIn", "category": "advertising",
+  "network": [
+    {"pattern": "px\\.ads\\.linkedin\\.com/collect", "strength": "strong", "label": "LinkedIn Insight event request"},
+    {"pattern": "snap\\.licdn\\.com/li\\.lms-analytics/insight\\.min\\.js", "strength": "medium", "label": "LinkedIn Insight runtime loaded"}
+  ],
+  "scripts": [{"pattern": "snap\\.licdn\\.com/li\\.lms-analytics/insight", "strength": "medium", "label": "LinkedIn Insight script"}],
+  "cookies": [{"pattern": "^li_fat_id$", "strength": "weak", "label": "LinkedIn first-party ads tracking cookie"}],
+  "globals": [{"pattern": "^_linkedin_partner_id$", "strength": "medium", "label": "LinkedIn partner global"}],
+  "dom": [{"pattern": "_linkedin_partner_id|snap\\.licdn\\.com/li\\.lms-analytics", "strength": "medium", "label": "LinkedIn Insight source marker"}],
+  "identifiers": [{"pattern": "_linkedin_partner_id\\s*=\\s*['\"]?(\\d{3,20})", "strength": "medium", "label": "LinkedIn partner ID"}]
+}

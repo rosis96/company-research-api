@@ -1,0 +1,12 @@
+{
+  "key": "tiktok", "display_name": "TikTok", "category": "advertising",
+  "network": [
+    {"pattern": "analytics\\.tiktok\\.com/.*/pixel/events", "strength": "strong", "label": "TikTok Pixel event request"},
+    {"pattern": "analytics\\.tiktok\\.com/i18n/pixel", "strength": "medium", "label": "TikTok Pixel runtime loaded"}
+  ],
+  "scripts": [{"pattern": "analytics\\.tiktok\\.com/i18n/pixel", "strength": "medium", "label": "TikTok Pixel script"}],
+  "cookies": [{"pattern": "^_ttp$", "strength": "weak", "label": "TikTok attribution cookie"}],
+  "globals": [{"pattern": "^ttq$", "strength": "medium", "label": "TikTok ttq global"}],
+  "dom": [{"pattern": "analytics\\.tiktok\\.com|\\bttq\\.(?:load|track|page)", "strength": "medium", "label": "TikTok Pixel source marker"}],
+  "identifiers": [{"pattern": "(?i)ttq\\.load\\s*\\(\\s*['\"]([A-Z0-9]{8,30})['\"]", "strength": "medium", "label": "TikTok Pixel ID"}]
+}

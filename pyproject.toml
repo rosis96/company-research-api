@@ -9,7 +9,7 @@ description = "First-party company website research API for GPT Actions"
 requires-python = ">=3.12"
 
 [tool.setuptools.packages.find]
-include = ["app*"]
+include = ["app*", "ad_research*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

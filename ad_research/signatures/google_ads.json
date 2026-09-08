@@ -1,0 +1,21 @@
+{
+  "key": "google_ads",
+  "display_name": "Google Ads",
+  "category": "advertising",
+  "network": [
+    {"pattern": "googleadservices\\.com/pagead/conversion", "strength": "strong", "label": "Google Ads conversion request"},
+    {"pattern": "googleads\\.g\\.doubleclick\\.net/pagead/(?:viewthrough)?conversion", "strength": "strong", "label": "Google Ads conversion request"},
+    {"pattern": "(?:www\\.)?google\\.[^/]+/pagead/(?:1p-)?conversion", "strength": "strong", "label": "Google Ads conversion endpoint"}
+  ],
+  "scripts": [
+    {"pattern": "googletagmanager\\.com/gtag/js\\?id=AW-\\d+", "strength": "medium", "label": "Google Ads gtag configuration"}
+  ],
+  "cookies": [],
+  "globals": [],
+  "dom": [
+    {"pattern": "(?:send_to|config)[^<]{0,100}AW-\\d+", "strength": "medium", "label": "Google Ads conversion source marker"}
+  ],
+  "identifiers": [
+    {"pattern": "\\b(AW-\\d{5,20})\\b", "strength": "medium", "label": "Google Ads conversion ID"}
+  ]
+}

@@ -1,0 +1,25 @@
+{
+  "key": "meta",
+  "display_name": "Meta",
+  "category": "advertising",
+  "network": [
+    {"pattern": "(?:www\\.)?facebook\\.com/tr(?:[/?]|$)", "strength": "strong", "label": "Meta pixel event request"},
+    {"pattern": "connect\\.facebook\\.net/.*/fbevents\\.js", "strength": "medium", "label": "Meta Pixel runtime loaded"}
+  ],
+  "scripts": [
+    {"pattern": "connect\\.facebook\\.net/.*/fbevents\\.js", "strength": "medium", "label": "Meta Pixel script"}
+  ],
+  "cookies": [
+    {"pattern": "^(?:_fbp|_fbc)$", "strength": "weak", "label": "Meta attribution cookie"}
+  ],
+  "globals": [
+    {"pattern": "^fbq$", "strength": "medium", "label": "fbq runtime global"}
+  ],
+  "dom": [
+    {"pattern": "fbevents\\.js|facebook\\.com/tr|\\bfbq\\s*\\(", "strength": "medium", "label": "Meta Pixel source marker"}
+  ],
+  "identifiers": [
+    {"pattern": "(?i)fbq\\s*\\(\\s*['\"]init['\"]\\s*,\\s*['\"](\\d{5,20})['\"]", "strength": "medium", "label": "Meta Pixel ID"},
+    {"pattern": "facebook\\.com/tr[^#]*[?&]id=(\\d{5,20})(?:&|$)", "strength": "medium", "label": "Meta Pixel ID"}
+  ]
+}

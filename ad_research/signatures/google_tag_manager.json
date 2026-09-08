@@ -1,0 +1,21 @@
+{
+  "key": "google_tag_manager",
+  "display_name": "Google Tag Manager",
+  "category": "tag_manager",
+  "network": [
+    {"pattern": "googletagmanager\\.com/gtm\\.js\\?id=GTM-", "strength": "medium", "label": "GTM container loaded"}
+  ],
+  "scripts": [
+    {"pattern": "googletagmanager\\.com/gtm\\.js\\?id=GTM-", "strength": "medium", "label": "GTM container script"}
+  ],
+  "cookies": [],
+  "globals": [
+    {"pattern": "^google_tag_manager$", "strength": "weak", "label": "GTM runtime global"}
+  ],
+  "dom": [
+    {"pattern": "googletagmanager\\.com/(?:gtm\\.js|ns\\.html).*GTM-", "strength": "medium", "label": "GTM source marker"}
+  ],
+  "identifiers": [
+    {"pattern": "\\b(GTM-[A-Z0-9]+)\\b", "strength": "medium", "label": "GTM container ID"}
+  ]
+}

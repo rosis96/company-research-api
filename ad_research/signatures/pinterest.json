@@ -1,0 +1,12 @@
+{
+  "key": "pinterest", "display_name": "Pinterest", "category": "advertising",
+  "network": [
+    {"pattern": "ct\\.pinterest\\.com/v3/", "strength": "strong", "label": "Pinterest conversion event request"},
+    {"pattern": "s\\.pinimg\\.com/ct/core\\.js", "strength": "medium", "label": "Pinterest Tag runtime loaded"}
+  ],
+  "scripts": [{"pattern": "s\\.pinimg\\.com/ct/core\\.js", "strength": "medium", "label": "Pinterest Tag script"}],
+  "cookies": [{"pattern": "^_pin_unauth$", "strength": "weak", "label": "Pinterest attribution cookie"}],
+  "globals": [{"pattern": "^pintrk$", "strength": "medium", "label": "Pinterest pintrk global"}],
+  "dom": [{"pattern": "s\\.pinimg\\.com/ct/core\\.js|\\bpintrk\\s*\\(", "strength": "medium", "label": "Pinterest Tag source marker"}],
+  "identifiers": [{"pattern": "(?i)pintrk\\s*\\(\\s*['\"]load['\"]\\s*,\\s*['\"](\\d{5,30})", "strength": "medium", "label": "Pinterest Tag ID"}]
+}

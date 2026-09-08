@@ -6,6 +6,9 @@ __pycache__/
 htmlcov/
 .env
 *.log
+ad_research.db
+ad_research.db-shm
+ad_research.db-wal
 
 # transient transfer artefact
 .job-404-fix.tgz

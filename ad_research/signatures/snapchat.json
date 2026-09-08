@@ -1,0 +1,12 @@
+{
+  "key": "snapchat", "display_name": "Snapchat", "category": "advertising",
+  "network": [
+    {"pattern": "tr\\.snapchat\\.com/p", "strength": "strong", "label": "Snap Pixel event request"},
+    {"pattern": "sc-static\\.net/scevent\\.min\\.js", "strength": "medium", "label": "Snap Pixel runtime loaded"}
+  ],
+  "scripts": [{"pattern": "sc-static\\.net/scevent\\.min\\.js", "strength": "medium", "label": "Snap Pixel script"}],
+  "cookies": [{"pattern": "^_scid(?:_r)?$", "strength": "weak", "label": "Snap attribution cookie"}],
+  "globals": [{"pattern": "^snaptr$", "strength": "medium", "label": "Snap Pixel global"}],
+  "dom": [{"pattern": "sc-static\\.net/scevent\\.min\\.js|\\bsnaptr\\s*\\(", "strength": "medium", "label": "Snap Pixel source marker"}],
+  "identifiers": [{"pattern": "(?i)snaptr\\s*\\(\\s*['\"]init['\"]\\s*,\\s*['\"]([a-f0-9-]{8,40})", "strength": "medium", "label": "Snap Pixel ID"}]
+}

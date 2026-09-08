@@ -1,0 +1,33 @@
+# Separate deployable service. This does not start app.main or its schedulers/jobs.
+FROM python:3.12-slim-bookworm
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PLAYWRIGHT_BROWSERS_PATH=/opt/pw-browsers
+
+WORKDIR /srv/app
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates curl tini \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY requirements.txt ./
+RUN pip install --no-cache-dir -r requirements.txt \
+    && playwright install --with-deps chromium \
+    && chmod -R a+rX /opt/pw-browsers \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY app ./app
+COPY ad_research ./ad_research
+
+RUN useradd --create-home --uid 10002 adresearch \
+    && chown -R adresearch:adresearch /srv/app
+USER adresearch
+
+EXPOSE 8010
+HEALTHCHECK --interval=30s --timeout=5s --start-period=45s --retries=3 \
+  CMD curl -fsS "http://127.0.0.1:${PORT:-8010}/api/health" || exit 1
+
+ENTRYPOINT ["/usr/bin/tini", "--"]
+CMD ["sh", "-c", "exec uvicorn ad_research.main:app --host 0.0.0.0 --port ${PORT:-8010} --workers 1 --timeout-keep-alive 80"]
