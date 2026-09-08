@@ -32,6 +32,7 @@ RUN playwright install --with-deps chromium \
     && rm -rf /var/lib/apt/lists/*
 
 COPY app ./app
+COPY ad_research ./ad_research
 COPY scripts ./scripts
 
 # Run unprivileged.  The Chromium sandbox is kept enabled; the container itself
@@ -53,4 +54,4 @@ ENTRYPOINT ["/usr/bin/tini", "--"]
 #
 # PORT is honoured because platforms such as Railway inject it; it defaults to
 # 8000 so `docker run` and docker-compose behave unchanged.
-CMD ["sh", "-c", "exec uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000} --workers ${WEB_CONCURRENCY:-2} --timeout-keep-alive 65 --no-access-log"]
+CMD ["sh", "-c", "if [ \"${SERVICE_MODE:-company-research}\" = \"ad-research\" ]; then exec uvicorn ad_research.main:app --host 0.0.0.0 --port ${PORT:-8000} --workers 1 --timeout-keep-alive 80; else exec uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000} --workers ${WEB_CONCURRENCY:-2} --timeout-keep-alive 65 --no-access-log; fi"]

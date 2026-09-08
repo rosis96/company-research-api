@@ -26,6 +26,7 @@ async def home(request: Request) -> FileResponse:
     return FileResponse(request.app.state.static_dir / "index.html")
 
 
+@router.get("/v1/health", include_in_schema=False)
 @router.get("/api/health")
 async def health(request: Request) -> dict:
     return {

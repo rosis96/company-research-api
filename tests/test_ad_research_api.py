@@ -9,6 +9,15 @@ from ad_research.main import create_app
 from ad_research.settings import AdResearchSettings
 
 
+def test_health_paths_support_both_railway_configs(tmp_path) -> None:
+    settings = AdResearchSettings(database_url=f"sqlite:///{tmp_path / 'api.db'}")
+    with TestClient(create_app(settings)) as client:
+        for path in ("/api/health", "/v1/health"):
+            response = client.get(path)
+            assert response.status_code == 200
+            assert response.json()["service"] == "ad-research"
+
+
 def test_batch_progress_results_and_csv_keep_failures_inconclusive(tmp_path) -> None:
     settings = AdResearchSettings(database_url=f"sqlite:///{tmp_path / 'api.db'}", concurrency=2)
     with TestClient(create_app(settings)) as client:
