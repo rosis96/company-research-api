@@ -77,6 +77,13 @@ async def create_job(payload: BatchRequest, request: Request) -> JobCreated:
     )
 
 
+@router.get("/api/jobs", response_model=list[JobSummary])
+async def list_jobs(
+    request: Request, limit: int = Query(default=20, ge=1, le=100)
+) -> list[JobSummary]:
+    return request.app.state.store.list_jobs(limit=limit)
+
+
 @router.post("/api/jobs/upload", response_model=JobCreated, status_code=202)
 async def upload_job(request: Request, file: UploadFile) -> JobCreated:
     raw = await file.read()

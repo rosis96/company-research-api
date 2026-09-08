@@ -242,6 +242,64 @@ class CrawlStore:
             )
         return len(job_ids)
 
+    def jobs_to_resume(self) -> list[str]:
+        """Return unfinished jobs and put interrupted rows back in the queue.
+
+        PostgreSQL is the source of truth for batches.  A Railway restart must
+        therefore resume unfinished rows instead of converting a valid upload
+        into hundreds of false ``INCONCLUSIVE`` results.
+        """
+        with self._lock, self.engine.begin() as connection:
+            job_ids = list(
+                connection.execute(
+                    select(crawl_jobs.c.id).where(
+                        crawl_jobs.c.status.in_(("PENDING", "RUNNING"))
+                    )
+                ).scalars()
+            )
+            if job_ids:
+                connection.execute(
+                    crawl_job_rows.update()
+                    .where(crawl_job_rows.c.job_id.in_(job_ids))
+                    .where(crawl_job_rows.c.status == "RUNNING")
+                    .values(status="PENDING")
+                )
+        return job_ids
+
+    def fail_unfinished_job(self, job_id: str, error: str) -> None:
+        """Make a job-runner failure visible and leave no batch stuck forever."""
+        message = " ".join(error.split())[:500]
+        with self._lock, self.engine.begin() as connection:
+            unfinished = connection.execute(
+                select(crawl_job_rows.c.id)
+                .where(crawl_job_rows.c.job_id == job_id)
+                .where(crawl_job_rows.c.status.in_(("PENDING", "RUNNING")))
+            ).scalars().all()
+            if unfinished:
+                connection.execute(
+                    crawl_job_rows.update()
+                    .where(crawl_job_rows.c.id.in_(unfinished))
+                    .values(
+                        status="INCONCLUSIVE",
+                        icp_classification="INCONCLUSIVE",
+                        evidence_1=f"Batch worker stopped before this website completed: {message}",
+                        error=message,
+                    )
+                )
+            job = connection.execute(
+                select(crawl_jobs.c.total_domains, crawl_jobs.c.failed_domains).where(
+                    crawl_jobs.c.id == job_id
+                )
+            ).first()
+            if job:
+                connection.execute(
+                    crawl_jobs.update().where(crawl_jobs.c.id == job_id).values(
+                        status="INCONCLUSIVE",
+                        completed_domains=job.total_domains,
+                        failed_domains=min(job.total_domains, job.failed_domains + len(unfinished)),
+                    )
+                )
+
     def create_job(
         self,
         domains: list[str],
@@ -643,6 +701,25 @@ class CrawlStore:
             status=job["status"],
             result_ids=result_ids,
         )
+
+    def list_jobs(self, *, limit: int = 20) -> list[JobSummary]:
+        with self.engine.connect() as connection:
+            rows = connection.execute(
+                select(crawl_jobs)
+                .order_by(crawl_jobs.c.created_at.desc())
+                .limit(limit)
+            ).mappings().all()
+        return [
+            JobSummary(
+                job_id=row["id"],
+                created_at=row["created_at"],
+                total_domains=row["total_domains"],
+                completed_domains=row["completed_domains"],
+                failed_domains=row["failed_domains"],
+                status=row["status"],
+            )
+            for row in rows
+        ]
 
     def get_job_domains(self, job_id: str) -> list[str] | None:
         with self.engine.connect() as connection:

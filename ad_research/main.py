@@ -26,11 +26,6 @@ def create_app(settings: AdResearchSettings | None = None) -> FastAPI:
     async def lifespan(app: FastAPI):
         store = CrawlStore(settings.database_url)
         store.create_schema()
-        recovered = store.recover_interrupted_jobs()
-        if recovered:
-            logging.getLogger(__name__).warning(
-                "marked %s interrupted ad-research job(s) inconclusive", recovered
-            )
         browser = BrowserManager(settings)
         signatures = SignatureEngine(settings.signature_directory)
         guard = UrlGuard(GuardPolicy(max_redirect_hops=5))
@@ -44,6 +39,13 @@ def create_app(settings: AdResearchSettings | None = None) -> FastAPI:
         app.state.jobs = jobs
         app.state.version = __version__
         app.state.static_dir = Path(__file__).parent / "static"
+        resumable_jobs = store.jobs_to_resume()
+        for job_id in resumable_jobs:
+            jobs.start(job_id)
+        if resumable_jobs:
+            logging.getLogger(__name__).warning(
+                "resumed %s unfinished ad-research job(s)", len(resumable_jobs)
+            )
         try:
             yield
         finally:

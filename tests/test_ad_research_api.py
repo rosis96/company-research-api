@@ -57,6 +57,19 @@ def test_ui_is_served(tmp_path) -> None:
         response = client.get("/")
         assert response.status_code == 200
         assert "Paid advertising infrastructure research" in response.text
+        assert "localStorage.setItem(JOB_KEY,id)" in response.text
+        assert "restoreJob();" in response.text
+
+
+def test_recent_jobs_can_be_reopened_after_refresh(tmp_path) -> None:
+    settings = AdResearchSettings(database_url=f"sqlite:///{tmp_path / 'api.db'}")
+    with TestClient(create_app(settings)) as client:
+        created = client.post("/api/jobs", json={"domains": ["http://127.0.0.1"]})
+        job_id = created.json()["job_id"]
+        recent = client.get("/api/jobs", params={"limit": 1})
+
+        assert recent.status_code == 200
+        assert recent.json()[0]["job_id"] == job_id
 
 
 def test_output_columns_never_overwrite_existing_lead_columns() -> None:
