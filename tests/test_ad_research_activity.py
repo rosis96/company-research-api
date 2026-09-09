@@ -75,8 +75,23 @@ def test_source_only_code_never_becomes_current_activity() -> None:
     enrich_ad_infrastructure_result(result)
     attach_research_context(result, DomainHistorySummary(), summarize_activity([]))
     assert result.infrastructure_freshness == "SOURCE_ONLY"
-    assert result.external_activity.confidence == "INCONCLUSIVE"
+    assert result.external_activity.confidence == "NOT_CHECKED"
+    assert result.primary_advertising_confidence == "LOW"
     assert result.combined_activity_confidence == "LOW"
+
+
+def test_primary_confidence_requires_fresh_strong_runtime_evidence() -> None:
+    strong = runtime_result("strong.test")
+    attach_research_context(strong, DomainHistorySummary(), summarize_activity([]))
+    assert strong.primary_advertising_confidence == "HIGH"
+
+    strong.advertising_infrastructure_confidence = "MEDIUM"
+    attach_research_context(strong, DomainHistorySummary(), summarize_activity([]))
+    assert strong.primary_advertising_confidence == "MEDIUM"
+
+    strong.status = "CRAWL_FAILED"
+    attach_research_context(strong, DomainHistorySummary(), summarize_activity([]))
+    assert strong.primary_advertising_confidence == "INCONCLUSIVE"
 
 
 def test_history_and_external_activity_raise_confidence_auditably(tmp_path) -> None:
@@ -103,6 +118,7 @@ def test_history_and_external_activity_raise_confidence_auditably(tmp_path) -> N
     assert research.external_activity.confidence == "CONFIRMED_CURRENT"
     assert research.external_activity.active_ads_count == 12
     assert research.combined_activity_confidence == "HIGH"
+    assert research.primary_advertising_confidence == "HIGH"
     assert store.get_landing_urls("brand.test") == ["https://offers.brand.test/summer"]
     store.dispose()
 

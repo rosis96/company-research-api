@@ -10,6 +10,7 @@ from ad_research.models import (
     CombinedActivityConfidence,
     DomainHistorySummary,
     IdentifierHistory,
+    PrimaryAdvertisingConfidence,
 )
 
 
@@ -120,8 +121,8 @@ def summarize_activity(
     now = _aware(now or datetime.now(UTC))
     if not evidence:
         return ActivitySummary(
-            confidence="INCONCLUSIVE",
-            reasons=["No external ad-library evidence has been recorded yet."],
+            confidence="NOT_CHECKED",
+            reasons=["External ad libraries have not been checked for this company."],
         )
 
     active_sources: set[str] = set()
@@ -183,11 +184,30 @@ def attach_research_context(
     apply_infrastructure_freshness(result)
     result.history = history
     result.external_activity = activity
+    result.primary_advertising_confidence = primary_advertising_confidence(result)
     confidence, reasons = combine_confidence(result, activity)
     result.combined_activity_confidence = confidence
     result.combined_confidence_reasons = reasons
     result.recommendation = "MAY_NOT_NEED_TO_ASK" if confidence == "HIGH" else "ASK_SPEND"
     return result
+
+
+def primary_advertising_confidence(
+    result: AnalysisResult,
+) -> PrimaryAdvertisingConfidence:
+    """One conservative filter based only on evidence observed in this crawl."""
+    if result.status != "COMPLETED":
+        return "INCONCLUSIVE"
+    infra = result.advertising_infrastructure_confidence
+    freshness = result.infrastructure_freshness
+    if infra == "HIGH" and freshness == "RUNTIME_ACTIVE":
+        return "HIGH"
+    if result.ad_infrastructure_result == "AD INFRA DETECTED" and freshness in {
+        "RUNTIME_ACTIVE",
+        "TAG_LOADED",
+    }:
+        return "MEDIUM"
+    return "LOW"
 
 
 def combine_confidence(

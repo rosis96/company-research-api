@@ -579,6 +579,7 @@ class CrawlStore:
                 infrastructure_freshness=result.infrastructure_freshness,
                 history=history,
                 external_activity=activity,
+                primary_advertising_confidence=result.primary_advertising_confidence,
                 combined_activity_confidence=result.combined_activity_confidence,
                 combined_confidence_reasons=result.combined_confidence_reasons,
             )
@@ -597,6 +598,7 @@ class CrawlStore:
             domain=domain_key,
             history=history,
             external_activity=activity,
+            primary_advertising_confidence="INCONCLUSIVE",
             combined_activity_confidence=combined,
             combined_confidence_reasons=reasons,
         )
@@ -847,12 +849,22 @@ class CrawlStore:
             infrastructure_freshness=(
                 result.infrastructure_freshness if result else "INCONCLUSIVE"
             ),
+            primary_advertising_confidence=(
+                result.primary_advertising_confidence if result else "INCONCLUSIVE"
+            ),
             current_ad_activity=(
-                result.external_activity.confidence if result else "INCONCLUSIVE"
+                result.external_activity.confidence if result else "NOT_CHECKED"
             ),
             combined_activity_confidence=(
                 result.combined_activity_confidence if result else "INCONCLUSIVE"
             ),
+            detected_platforms=(
+                sorted(key for key, item in result.platforms.items() if item.detected)
+                if result
+                else []
+            ),
+            runtime_platforms=(result.runtime_platforms if result else []),
+            pages_crawled=(result.pages_crawled if result else 0),
             scan_count=result.history.total_scans if result else 0,
             last_runtime_signal_at=(result.history.last_runtime_signal_at if result else None),
             evidence_1=row["evidence_1"],

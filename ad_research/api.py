@@ -168,10 +168,14 @@ async def export_job_csv(job_id: str, request: Request) -> StreamingResponse:
         output.update(
             {
                 output_names["classification"]: row.ad_infrastructure_result,
+                output_names["primary_confidence"]: row.primary_advertising_confidence,
                 output_names["infrastructure_confidence"]: row.infrastructure_confidence,
                 output_names["infrastructure_freshness"]: row.infrastructure_freshness,
                 output_names["activity"]: row.current_ad_activity,
                 output_names["combined_confidence"]: row.combined_activity_confidence,
+                output_names["detected_platforms"]: ", ".join(row.detected_platforms),
+                output_names["runtime_platforms"]: ", ".join(row.runtime_platforms),
+                output_names["pages_crawled"]: row.pages_crawled,
                 output_names["scan_count"]: row.scan_count,
                 output_names["last_runtime"]: (
                     row.last_runtime_signal_at.isoformat() if row.last_runtime_signal_at else ""
@@ -179,6 +183,7 @@ async def export_job_csv(job_id: str, request: Request) -> StreamingResponse:
                 output_names["evidence_1"]: row.evidence_1,
                 output_names["evidence_2"]: row.evidence_2,
                 output_names["evidence_3"]: row.evidence_3,
+                output_names["error_notes"]: row.error or "",
             }
         )
         writer.writerow(output)
@@ -246,14 +251,19 @@ def _output_column_names(source_columns: list[str]) -> dict[str, str]:
         return candidate
 
     return {
+        "primary_confidence": unique("Primary Advertising Confidence"),
         "classification": unique("Ad Infrastructure Result"),
         "infrastructure_confidence": unique("Infrastructure Confidence"),
         "infrastructure_freshness": unique("Infrastructure Freshness"),
         "activity": unique("Current Ad Activity"),
         "combined_confidence": unique("Combined Activity Confidence"),
+        "detected_platforms": unique("Detected Ad Platforms"),
+        "runtime_platforms": unique("Runtime Ad Platforms"),
+        "pages_crawled": unique("Pages Crawled"),
         "scan_count": unique("Research Scan Count"),
         "last_runtime": unique("Last Runtime Signal At"),
         "evidence_1": unique("Evidence 1"),
         "evidence_2": unique("Evidence 2"),
         "evidence_3": unique("Evidence 3"),
+        "error_notes": unique("Error / Notes"),
     }

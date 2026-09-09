@@ -46,8 +46,11 @@ def test_batch_progress_results_and_csv_keep_failures_inconclusive(tmp_path) -> 
         exported = client.get(f"/api/jobs/{job_id}/csv")
         assert exported.status_code == 200
         assert "Ad Infrastructure Result,Infrastructure Confidence" in exported.text
+        assert "Primary Advertising Confidence" in exported.text
         assert "Combined Activity Confidence" in exported.text
         assert "Evidence 1,Evidence 2,Evidence 3" in exported.text
+        assert "Detected Ad Platforms,Runtime Ad Platforms,Pages Crawled" in exported.text
+        assert "Error / Notes" in exported.text
         assert "INCONCLUSIVE" in exported.text
 
 

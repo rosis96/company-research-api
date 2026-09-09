@@ -2,7 +2,10 @@ from __future__ import annotations
 
 from urllib.parse import urlsplit
 
-from ad_research.activity import apply_infrastructure_freshness
+from ad_research.activity import (
+    apply_infrastructure_freshness,
+    primary_advertising_confidence,
+)
 from ad_research.models import AnalysisResult, Evidence
 
 _PLATFORM_NAMES = {
@@ -23,6 +26,7 @@ def enrich_ad_infrastructure_result(result: AnalysisResult) -> AnalysisResult:
     """Attach the observed-infrastructure result and three distinct reasons."""
     apply_infrastructure_freshness(result)
     result.ad_infrastructure_result = classify_ad_infrastructure(result)
+    result.primary_advertising_confidence = primary_advertising_confidence(result)
     result.recommendation = (
         "MAY_NOT_NEED_TO_ASK"
         if result.advertising_infrastructure_confidence == "HIGH"

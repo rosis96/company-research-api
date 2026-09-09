@@ -36,9 +36,15 @@ ReportedActivityStatus = Literal[
     "ACTIVE", "RECENT", "HISTORICAL", "NOT_FOUND", "INCONCLUSIVE"
 ]
 ActivityConfidence = Literal[
-    "CONFIRMED_CURRENT", "RECENT_ACTIVITY", "POSSIBLE", "NOT_FOUND", "INCONCLUSIVE"
+    "NOT_CHECKED",
+    "CONFIRMED_CURRENT",
+    "RECENT_ACTIVITY",
+    "POSSIBLE",
+    "NOT_FOUND",
+    "INCONCLUSIVE",
 ]
 CombinedActivityConfidence = Literal["HIGH", "MEDIUM", "LOW", "INCONCLUSIVE"]
+PrimaryAdvertisingConfidence = Literal["HIGH", "MEDIUM", "LOW", "INCONCLUSIVE"]
 
 
 class Evidence(BaseModel):
@@ -143,7 +149,7 @@ class ActivityEvidenceRecord(ActivityEvidenceCreate):
 class ActivitySummary(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    confidence: ActivityConfidence = "INCONCLUSIVE"
+    confidence: ActivityConfidence = "NOT_CHECKED"
     sources_checked: int = 0
     sources_with_activity: int = 0
     active_ads_count: int | None = None
@@ -176,6 +182,7 @@ class AnalysisResult(BaseModel):
     landing_pages_crawled: int = 0
     history: DomainHistorySummary = Field(default_factory=DomainHistorySummary)
     external_activity: ActivitySummary = Field(default_factory=ActivitySummary)
+    primary_advertising_confidence: PrimaryAdvertisingConfidence = "INCONCLUSIVE"
     combined_activity_confidence: CombinedActivityConfidence = "INCONCLUSIVE"
     combined_confidence_reasons: list[str] = Field(default_factory=list)
     # Read old locally persisted result JSON without exposing the misleading
@@ -242,8 +249,12 @@ class JobRow(BaseModel):
     ad_infrastructure_result: AdInfrastructureResult = "INCONCLUSIVE"
     infrastructure_confidence: OverallConfidence = "INCONCLUSIVE"
     infrastructure_freshness: InfrastructureFreshness = "INCONCLUSIVE"
-    current_ad_activity: ActivityConfidence = "INCONCLUSIVE"
+    primary_advertising_confidence: PrimaryAdvertisingConfidence = "INCONCLUSIVE"
+    current_ad_activity: ActivityConfidence = "NOT_CHECKED"
     combined_activity_confidence: CombinedActivityConfidence = "INCONCLUSIVE"
+    detected_platforms: list[str] = Field(default_factory=list)
+    runtime_platforms: list[str] = Field(default_factory=list)
+    pages_crawled: int = 0
     scan_count: int = 0
     last_runtime_signal_at: datetime | None = None
     evidence_1: str = ""
@@ -269,6 +280,7 @@ class DomainResearchSummary(BaseModel):
     infrastructure_freshness: InfrastructureFreshness = "INCONCLUSIVE"
     history: DomainHistorySummary = Field(default_factory=DomainHistorySummary)
     external_activity: ActivitySummary = Field(default_factory=ActivitySummary)
+    primary_advertising_confidence: PrimaryAdvertisingConfidence = "INCONCLUSIVE"
     combined_activity_confidence: CombinedActivityConfidence = "INCONCLUSIVE"
     combined_confidence_reasons: list[str] = Field(default_factory=list)
 
