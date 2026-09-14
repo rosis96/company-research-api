@@ -27,17 +27,22 @@ def enrich_ad_infrastructure_result(result: AnalysisResult) -> AnalysisResult:
     apply_infrastructure_freshness(result)
     result.ad_infrastructure_result = classify_ad_infrastructure(result)
     result.primary_advertising_confidence = primary_advertising_confidence(result)
-    result.recommendation = (
-        "MAY_NOT_NEED_TO_ASK"
-        if result.advertising_infrastructure_confidence == "HIGH"
-        else "ASK_SPEND"
-    )
+    if result.status == "NO_WEBSITE":
+        result.recommendation = "LOW_PRIORITY"
+    else:
+        result.recommendation = (
+            "MAY_NOT_NEED_TO_ASK"
+            if result.advertising_infrastructure_confidence == "HIGH"
+            else "ASK_SPEND"
+        )
     result.evidence_summaries = summarize_evidence(result, limit=3)
     return result
 
 
 def classify_ad_infrastructure(result: AnalysisResult):
     """Classify browser evidence only, never the company's actual ad activity."""
+    if result.status == "NO_WEBSITE":
+        return "NO WEBSITE"
     if result.status != "COMPLETED":
         return "INCONCLUSIVE"
     if result.advertising_infrastructure_confidence in {"HIGH", "MEDIUM"}:
@@ -46,6 +51,10 @@ def classify_ad_infrastructure(result: AnalysisResult):
 
 
 def summarize_evidence(result: AnalysisResult, *, limit: int = 3) -> list[str]:
+    if result.status == "NO_WEBSITE":
+        return [
+            "No active website was found after checking the supplied domain, www/apex, and HTTPS/HTTP alternatives."
+        ]
     if result.status != "COMPLETED":
         return [_explain_inconclusive(result)][:limit]
 

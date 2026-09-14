@@ -2,9 +2,14 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from ad_research.classifier import classify_overall
-from ad_research.detector import AdvertisingDetector, _accept_cookie_consent_in_root
+from ad_research.detector import (
+    AdvertisingDetector,
+    _accept_cookie_consent_in_root,
+    _candidate_seed_urls,
+)
 from ad_research.models import (
     AnalysisResult,
     Evidence,
@@ -15,7 +20,8 @@ from ad_research.models import (
 from ad_research.qualification import enrich_ad_infrastructure_result
 from ad_research.settings import AdResearchSettings
 from ad_research.signature_engine import SignatureEngine
-from app.security.url_guard import GuardPolicy, UrlGuard
+from app.security.reasons import ReasonCode
+from app.security.url_guard import GuardError, GuardPolicy, UrlGuard
 
 SIGNATURES = Path(__file__).parents[1] / "ad_research" / "signatures"
 
@@ -206,6 +212,47 @@ async def test_invalid_or_private_url_is_structured_failure() -> None:
     assert result.status == "CRAWL_FAILED"
     assert result.advertising_infrastructure_confidence == "INCONCLUSIVE"
     assert result.recommendation == "ASK_SPEND"
+
+
+def test_homepage_candidates_cover_protocol_and_www_fallbacks() -> None:
+    candidates = _candidate_seed_urls("example.com/some-page")
+    assert candidates == [
+        "https://example.com/some-page",
+        "https://example.com/",
+        "http://example.com/",
+        "https://www.example.com/",
+        "http://www.example.com/",
+    ]
+
+
+async def test_missing_dns_is_reported_as_no_website() -> None:
+    class MissingDnsGuard:
+        async def validate(self, raw_url: str, scope=None):
+            host = urlsplit(raw_url).hostname or ""
+            raise GuardError(ReasonCode.DNS_FAILURE, f"{host} did not resolve")
+
+    detector = AdvertisingDetector(
+        AdResearchSettings(),
+        browser=None,
+        guard=MissingDnsGuard(),
+        signatures=SignatureEngine(SIGNATURES),
+    )
+    result = await detector.analyze("missing-example.test")
+    assert result.status == "NO_WEBSITE"
+    assert result.ad_infrastructure_result == "NO WEBSITE"
+    assert result.primary_advertising_confidence == "NO WEBSITE"
+    assert result.recommendation == "LOW_PRIORITY"
+
+
+async def test_blank_website_is_reported_as_no_website() -> None:
+    detector = AdvertisingDetector(
+        AdResearchSettings(),
+        browser=None,
+        guard=UrlGuard(GuardPolicy()),
+        signatures=SignatureEngine(SIGNATURES),
+    )
+    result = await detector.analyze(" ")
+    assert result.status == "NO_WEBSITE"
 
 
 async def test_generic_consent_click_requires_cookie_context() -> None:

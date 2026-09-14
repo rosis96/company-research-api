@@ -19,7 +19,8 @@ class AdResearchSettings(BaseSettings):
     port: int = 8010
     database_url: str = "sqlite:///./ad_research.db"
     concurrency: int = 3
-    max_batch_size: int = 5_000
+    max_batch_size: int = 25_000
+    max_upload_bytes: int = 100_000_000
     total_timeout_seconds: int = 75
     navigation_timeout_ms: int = 20_000
     settle_time_ms: int = 2_000

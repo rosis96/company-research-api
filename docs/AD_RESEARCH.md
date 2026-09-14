@@ -62,6 +62,10 @@ For cold-outreach CSVs, the browser-observation label is:
   `LOW` or `NONE`. This does **not** mean the company does not advertise.
 - `INCONCLUSIVE`: the site could not be inspected reliably (`CRAWL_FAILED` or
   `INCONCLUSIVE`). These rows must not be treated as negative prospects.
+- `NO WEBSITE`: the supplied domain, its www/apex alternative, and HTTPS/HTTP
+  alternatives all produced stable no-site signals such as DNS failure, 404/410,
+  or connection refusal. Bot blocks, rate limits, TLS errors, and timeouts remain
+  `INCONCLUSIVE` because they do not prove the website is inactive.
 
 Actual advertising activity and Unicorn Marketers ICP qualification are separate
 downstream decisions. The activity layer can store dated, attributable evidence
@@ -148,22 +152,27 @@ the same website. Names, emails and every other original column remain attached
 to that exact row. Jobs are isolated by job ID, so one uploaded file cannot use
 or overwrite another file's rows.
 
-The default local limit is 5,000 rows and 25 MB per CSV. The interface paginates
+The default limit is 25,000 rows and 100 MB per CSV. The interface paginates
 large files while processing continues; the completed export always includes
 every row, not only the currently visible page.
 
 The completed download preserves the original header order and appends:
 
+- `Primary Advertising Confidence`
 - `Ad Infrastructure Result`
 - `Infrastructure Confidence`
 - `Infrastructure Freshness`
 - `Current Ad Activity`
 - `Combined Activity Confidence`
+- `Detected Ad Platforms`
+- `Runtime Ad Platforms`
+- `Pages Crawled`
 - `Research Scan Count`
 - `Last Runtime Signal At`
 - `Evidence 1`
 - `Evidence 2`
 - `Evidence 3`
+- `Error / Notes`
 
 Evidence is ranked and deduplicated: multiple platforms are preferred, followed
 by distinct runtime events on different pages, then supporting scripts or IDs.
@@ -199,18 +208,22 @@ avoid collisions when reusing an existing database. Before changing these
 tables after V1, introduce Alembic migrations; startup `create_all` is only the
 initial schema bootstrap, not a substitute for versioned production migrations.
 
-## Future Railway service (do not deploy yet)
+## Railway service
 
 Create a second service in the same Railway project using this repository and:
 
 1. Set its Dockerfile path to `Dockerfile.ad-research`.
 2. Set `AD_RESEARCH_DATABASE_URL`, preferably using the existing PostgreSQL
    service reference while the prefixed schema remains small and isolated.
-3. Give Chromium at least 2 GB memory; 4 GB is safer for concurrency 3.
-4. Keep one replica initially. Scale domain concurrency with
+3. Set `AD_RESEARCH_MAX_BATCH_SIZE=25000` and
+   `AD_RESEARCH_MAX_UPLOAD_BYTES=100000000`. A pre-existing Railway variable
+   overrides the code default, so an old value of `5000` must be changed.
+4. Give Chromium at least 2 GB memory; 4 GB is safer for concurrency 3.
+5. Keep one replica initially. Scale domain concurrency with
    `AD_RESEARCH_CONCURRENCY`, not Uvicorn workers.
-5. Confirm `/api/health`, then run the diagnostic test set before connecting any
-   lead workflow.
+6. Open `/api/health` and confirm the returned `max_batch_size`,
+   `max_upload_bytes`, and `crawl_concurrency`, then run the diagnostic test set
+   before connecting any lead workflow.
 
 The service binds to `0.0.0.0:$PORT` in the container. The original repository
 Dockerfile and `app.main:app` entry point are unchanged.

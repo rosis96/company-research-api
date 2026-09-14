@@ -7,12 +7,16 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 PlatformConfidence = Literal["CONFIRMED", "LIKELY", "POSSIBLE", "NOT_DETECTED"]
 OverallConfidence = Literal["HIGH", "MEDIUM", "LOW", "NONE", "INCONCLUSIVE"]
-CrawlStatus = Literal["PENDING", "RUNNING", "COMPLETED", "INCONCLUSIVE", "CRAWL_FAILED"]
+CrawlStatus = Literal[
+    "PENDING", "RUNNING", "COMPLETED", "NO_WEBSITE", "INCONCLUSIVE", "CRAWL_FAILED"
+]
 Recommendation = Literal["MAY_NOT_NEED_TO_ASK", "ASK_SPEND", "LOW_PRIORITY"]
 AdInfrastructureResult = Literal[
-    "AD INFRA DETECTED", "NO AD INFRA DETECTED", "INCONCLUSIVE"
+    "AD INFRA DETECTED", "NO AD INFRA DETECTED", "NO WEBSITE", "INCONCLUSIVE"
 ]
-JobRowStatus = Literal["PENDING", "RUNNING", "COMPLETED", "INCONCLUSIVE", "CRAWL_FAILED"]
+JobRowStatus = Literal[
+    "PENDING", "RUNNING", "COMPLETED", "NO_WEBSITE", "INCONCLUSIVE", "CRAWL_FAILED"
+]
 InfrastructureFreshness = Literal[
     "RUNTIME_ACTIVE",
     "TAG_LOADED",
@@ -44,7 +48,9 @@ ActivityConfidence = Literal[
     "INCONCLUSIVE",
 ]
 CombinedActivityConfidence = Literal["HIGH", "MEDIUM", "LOW", "INCONCLUSIVE"]
-PrimaryAdvertisingConfidence = Literal["HIGH", "MEDIUM", "LOW", "INCONCLUSIVE"]
+PrimaryAdvertisingConfidence = Literal[
+    "HIGH", "MEDIUM", "LOW", "NO WEBSITE", "INCONCLUSIVE"
+]
 
 
 class Evidence(BaseModel):

@@ -188,7 +188,10 @@ def attach_research_context(
     confidence, reasons = combine_confidence(result, activity)
     result.combined_activity_confidence = confidence
     result.combined_confidence_reasons = reasons
-    result.recommendation = "MAY_NOT_NEED_TO_ASK" if confidence == "HIGH" else "ASK_SPEND"
+    if result.status == "NO_WEBSITE":
+        result.recommendation = "LOW_PRIORITY"
+    else:
+        result.recommendation = "MAY_NOT_NEED_TO_ASK" if confidence == "HIGH" else "ASK_SPEND"
     return result
 
 
@@ -196,6 +199,8 @@ def primary_advertising_confidence(
     result: AnalysisResult,
 ) -> PrimaryAdvertisingConfidence:
     """One conservative filter based only on evidence observed in this crawl."""
+    if result.status == "NO_WEBSITE":
+        return "NO WEBSITE"
     if result.status != "COMPLETED":
         return "INCONCLUSIVE"
     infra = result.advertising_infrastructure_confidence

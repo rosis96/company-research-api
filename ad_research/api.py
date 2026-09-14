@@ -29,10 +29,14 @@ async def home(request: Request) -> FileResponse:
 @router.get("/v1/health", include_in_schema=False)
 @router.get("/api/health")
 async def health(request: Request) -> dict:
+    settings = request.app.state.settings
     return {
         "status": "ok",
         "service": "ad-research",
         "version": request.app.state.version,
+        "max_batch_size": settings.max_batch_size,
+        "max_upload_bytes": settings.max_upload_bytes,
+        "crawl_concurrency": settings.concurrency,
     }
 
 
@@ -87,13 +91,14 @@ async def list_jobs(
 @router.post("/api/jobs/upload", response_model=JobCreated, status_code=202)
 async def upload_job(request: Request, file: UploadFile) -> JobCreated:
     raw = await file.read()
-    if len(raw) > 25_000_000:
-        raise HTTPException(413, "CSV file is too large; maximum upload is 25 MB")
+    settings = request.app.state.settings
+    if len(raw) > settings.max_upload_bytes:
+        limit_mb = settings.max_upload_bytes // 1_000_000
+        raise HTTPException(413, f"CSV file is too large; maximum upload is {limit_mb} MB")
     try:
         columns, website_column, rows, domains = _parse_csv(raw.decode("utf-8-sig"))
     except UnicodeDecodeError as exc:
         raise HTTPException(422, "CSV must be UTF-8 encoded") from exc
-    settings = request.app.state.settings
     if len(domains) > settings.max_batch_size:
         raise HTTPException(422, f"maximum batch size is {settings.max_batch_size} rows")
     job = request.app.state.store.create_job(

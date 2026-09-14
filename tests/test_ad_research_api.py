@@ -16,6 +16,15 @@ def test_health_paths_support_both_railway_configs(tmp_path) -> None:
             response = client.get(path)
             assert response.status_code == 200
             assert response.json()["service"] == "ad-research"
+            assert response.json()["max_batch_size"] == settings.max_batch_size
+            assert response.json()["max_upload_bytes"] == settings.max_upload_bytes
+            assert response.json()["crawl_concurrency"] == settings.concurrency
+
+
+def test_default_batch_capacity_supports_more_than_ten_thousand_rows() -> None:
+    settings = AdResearchSettings(_env_file=None)
+    assert settings.max_batch_size >= 10_000
+    assert settings.max_upload_bytes >= 50_000_000
 
 
 def test_batch_progress_results_and_csv_keep_failures_inconclusive(tmp_path) -> None:

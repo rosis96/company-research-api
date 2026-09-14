@@ -17,6 +17,7 @@ from ad_research.qualification import enrich_ad_infrastructure_result
 from ad_research.settings import AdResearchSettings
 from ad_research.signature_engine import SignatureEngine
 from app.security.domains import registrable_domain
+from app.security.reasons import ReasonCode
 from app.security.url_guard import CrawlScope, GuardError, UrlGuard, coerce_input_url
 
 log = logging.getLogger(__name__)
@@ -110,7 +111,13 @@ class BrowserManager:
 
     async def _ensure_browser(self) -> Browser:
         async with self._lock:
-            if self._browser and self._domains_since_restart >= self.settings.recycle_after_domains:
+            should_recycle = (
+                self._browser is not None
+                and self.settings.recycle_after_domains > 0
+                and self._domains_since_restart >= self.settings.recycle_after_domains
+                and not self._browser.contexts
+            )
+            if should_recycle:
                 log.info(
                     "recycling Chromium after %s domains (rss_mb=%.1f)",
                     self._domains_since_restart,
@@ -174,38 +181,93 @@ class AdvertisingDetector:
     ) -> AnalysisResult:
         started = datetime.now(UTC)
         try:
-            normalized = _normalize_url(raw_url)
-            target = await self.guard.validate(normalized)
+            candidates = _candidate_seed_urls(raw_url)
         except GuardError as exc:
+            if exc.reason == ReasonCode.INVALID_URL and exc.detail == "empty url":
+                return self._failure(
+                    raw_url,
+                    started,
+                    "NO_WEBSITE",
+                    "No website was supplied.",
+                )
             return self._failure(
                 raw_url, started, "CRAWL_FAILED", f"invalid or unsafe URL: {exc.detail}"
             )
         except Exception as exc:
             return self._failure(raw_url, started, "CRAWL_FAILED", f"invalid URL: {exc}")
 
+        domain_hint = urlsplit(candidates[0]).hostname or ""
+        last_attempted_url = candidates[0]
         try:
             async with asyncio.timeout(self.settings.total_timeout_seconds):
-                return await self._analyze_validated(
-                    target.url, raw_url, started, landing_page_urls or []
-                )
+                validated = []
+                dns_failures: list[str] = []
+                for candidate in candidates:
+                    try:
+                        target = await self.guard.validate(candidate)
+                    except GuardError as exc:
+                        if exc.reason == ReasonCode.DNS_FAILURE:
+                            dns_failures.append(exc.detail)
+                            continue
+                        return self._failure(
+                            raw_url,
+                            started,
+                            "CRAWL_FAILED",
+                            f"invalid or unsafe URL: {exc.detail}",
+                        )
+                    if target.url not in {item.url for item in validated}:
+                        validated.append(target)
+
+                if not validated:
+                    return self._failure(
+                        raw_url,
+                        started,
+                        "NO_WEBSITE",
+                        "No active website was found: the domain did not resolve in DNS.",
+                        domain=urlsplit(candidates[0]).hostname or "",
+                    )
+
+                attempts: list[AnalysisResult] = []
+                for target in validated:
+                    domain_hint = target.host
+                    last_attempted_url = target.url
+                    result = await self._analyze_validated(
+                        target.url, raw_url, started, landing_page_urls or []
+                    )
+                    if result.status == "COMPLETED":
+                        return result
+                    attempts.append(result)
+
+                if attempts and all(_is_definitively_inactive(item) for item in attempts):
+                    result = attempts[0]
+                    result.status = "NO_WEBSITE"
+                    result.advertising_infrastructure_confidence = "NONE"
+                    result.error = (
+                        "No active website was found after checking HTTPS/HTTP and www/apex alternatives."
+                    )
+                    result.technical_notes = _dedupe(
+                        [*result.technical_notes, result.error, *dns_failures]
+                    )[:30]
+                    return enrich_ad_infrastructure_result(result)
+                return _best_failed_attempt(attempts)
         except TimeoutError:
             return self._failure(
                 raw_url,
                 started,
                 "INCONCLUSIVE",
                 f"domain crawl exceeded {self.settings.total_timeout_seconds}s timeout",
-                domain=target.host,
+                domain=domain_hint,
             )
         except Exception as exc:
             if "Target page, context or browser has been closed" in str(exc):
                 await self.browser.invalidate()
-            log.exception("ad crawl failed", extra={"url": target.url})
+            log.exception("ad crawl failed", extra={"url": last_attempted_url})
             return self._failure(
                 raw_url,
                 started,
                 "CRAWL_FAILED",
                 f"browser crawl failed: {type(exc).__name__}: {str(exc)[:300]}",
-                domain=target.host,
+                domain=domain_hint,
             )
 
     async def _analyze_validated(
@@ -347,7 +409,12 @@ class AdvertisingDetector:
                 landing_pages_requested=landing_page_urls,
             )
         finally:
-            await context.close()
+            try:
+                await context.close()
+            except Exception as exc:
+                # A browser/context shutdown must not overwrite a result that was
+                # already collected successfully for this domain.
+                log.warning("browser context close failed: %s", str(exc)[:180])
 
     async def _instrument_page(
         self,
@@ -538,6 +605,7 @@ class AdvertisingDetector:
         *,
         domain: str = "",
     ) -> AnalysisResult:
+        no_website = status == "NO_WEBSITE"
         return enrich_ad_infrastructure_result(
             AnalysisResult(
                 domain=domain,
@@ -545,8 +613,8 @@ class AdvertisingDetector:
                 status=status,
                 started_at=started,
                 completed_at=datetime.now(UTC),
-                advertising_infrastructure_confidence="INCONCLUSIVE",
-                recommendation="ASK_SPEND",
+                advertising_infrastructure_confidence=("NONE" if no_website else "INCONCLUSIVE"),
+                recommendation=("LOW_PRIORITY" if no_website else "ASK_SPEND"),
                 error=error,
                 technical_notes=[error],
             )
@@ -558,6 +626,59 @@ def _normalize_url(raw: str) -> str:
     parts = urlsplit(candidate)
     path = parts.path or "/"
     return urlunsplit((parts.scheme.lower(), parts.netloc.lower(), path, parts.query, ""))
+
+
+def _candidate_seed_urls(raw: str) -> list[str]:
+    """Return safe homepage alternatives without leaving the company domain."""
+    normalized = _normalize_url(raw)
+    parts = urlsplit(normalized)
+    host = parts.hostname or ""
+    port = f":{parts.port}" if parts.port else ""
+    supplied = urlunsplit((parts.scheme, f"{host}{port}", parts.path or "/", parts.query, ""))
+    candidates = [supplied]
+    root_host = registrable_domain(host)
+    hosts = [host]
+    if host == root_host:
+        hosts.append(f"www.{root_host}")
+    elif host == f"www.{root_host}":
+        hosts.append(root_host)
+    for candidate_host in hosts:
+        for scheme in (parts.scheme, "http" if parts.scheme == "https" else "https"):
+            candidate = urlunsplit((scheme, candidate_host, "/", "", ""))
+            if candidate not in candidates:
+                candidates.append(candidate)
+    return candidates
+
+
+def _is_definitively_inactive(result: AnalysisResult) -> bool:
+    reason = " ".join(
+        [
+            result.error or "",
+            *(page.error or "" for page in result.pages),
+        ]
+    )
+    return any(
+        marker in reason
+        for marker in (
+            "HTTP 404",
+            "HTTP 410",
+            "ERR_NAME_NOT_RESOLVED",
+            "ERR_CONNECTION_REFUSED",
+            "ERR_ADDRESS_UNREACHABLE",
+        )
+    )
+
+
+def _best_failed_attempt(attempts: list[AnalysisResult]) -> AnalysisResult:
+    if not attempts:
+        raise RuntimeError("no crawl attempt was made")
+    # Prefer the original URL's diagnostic unless another attempt reached a
+    # clear bot/rate-limit response, which is more useful than a generic error.
+    for result in attempts:
+        reason = " ".join([result.error or "", *(page.error or "" for page in result.pages)])
+        if any(marker in reason for marker in ("HTTP 403", "HTTP 429", "bot-protection")):
+            return result
+    return attempts[0]
 
 
 async def _settle(page: Page, milliseconds: int) -> None:
