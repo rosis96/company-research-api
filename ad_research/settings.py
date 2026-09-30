@@ -31,6 +31,8 @@ class AdResearchSettings(BaseSettings):
     browser_headless: bool = True
     browser_executable_path: str | None = None
     recycle_after_domains: int = 100
+    block_heavy_resources: bool = True
+    dedupe_job_domains: bool = True
     ignore_https_errors: bool = False
     user_agent: str = (
         "UnicornAdResearchBot/0.1 "

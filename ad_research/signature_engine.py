@@ -19,6 +19,11 @@ class SignatureEngine:
 
     def __init__(self, signature_directory: Path) -> None:
         self.signatures = self._load(signature_directory)
+        self._network_patterns = [
+            re.compile(spec.pattern, re.IGNORECASE)
+            for signature in self.signatures
+            for spec in (*signature.network, *signature.scripts)
+        ]
 
     @staticmethod
     def _load(directory: Path) -> list[PlatformSignature]:
@@ -66,6 +71,10 @@ class SignatureEngine:
             )
 
         return platforms, tag_manager
+
+    def matches_network(self, url: str) -> bool:
+        """True when a request URL matches any platform's network or script rule."""
+        return any(pattern.search(url) for pattern in self._network_patterns)
 
     def exact_global_names(self) -> list[str]:
         """Return config entries that are literal global names, not regexes."""

@@ -10,6 +10,7 @@ from sqlalchemy import (
     Column,
     DateTime,
     ForeignKey,
+    Index,
     Integer,
     MetaData,
     String,
@@ -123,6 +124,15 @@ activity_evidence = Table(
 )
 
 
+# create_all only builds indexes together with brand-new tables, so
+# create_schema also creates these on databases that already exist.
+_INDEXES = (
+    Index("ix_ad_research_job_rows_job_order", crawl_job_rows.c.job_id, crawl_job_rows.c.row_index),
+    Index("ix_ad_research_job_rows_job_status", crawl_job_rows.c.job_id, crawl_job_rows.c.status),
+    Index("ix_ad_research_crawl_results_job", crawl_results.c.job_id),
+)
+
+
 class CrawlStore:
     """Small SQL repository; SQLite locally and PostgreSQL via DATABASE_URL later."""
 
@@ -133,9 +143,14 @@ class CrawlStore:
             kwargs["connect_args"] = {"check_same_thread": False}
         self.engine: Engine = create_engine(database_url, **kwargs)
         self._lock = threading.RLock()
+        # Job metadata never changes after creation; caching it keeps progress
+        # polls from re-parsing a 25k-domain JSON document every two seconds.
+        self._job_metadata_cache: dict[str, dict] = {}
 
     def create_schema(self) -> None:
         metadata.create_all(self.engine)
+        for index in _INDEXES:
+            index.create(self.engine, checkfirst=True)
         self._migrate_legacy_classification_labels()
         self._backfill_domain_scans()
 
@@ -375,7 +390,16 @@ class CrawlStore:
     ) -> StoredResult:
         result = enrich_ad_infrastructure_result(result)
         result_id = f"res_{uuid.uuid4().hex}"
+        if job_id and not job_row_id:
+            raise ValueError("job_row_id is required for batch results")
         with self._lock, self.engine.begin() as connection:
+            # Record the scan first so the history computed below includes it,
+            # then write the fully scored result once.
+            connection.execute(domain_scans.insert().values(**_scan_values(result_id, result)))
+            history, activity = self._research_parts(
+                connection, _result_domain_key(result)
+            )
+            result = attach_research_context(result, history, activity)
             connection.execute(
                 crawl_results.insert().values(
                     id=result_id,
@@ -391,56 +415,43 @@ class CrawlStore:
                     error=result.error,
                 )
             )
-            connection.execute(domain_scans.insert().values(**_scan_values(result_id, result)))
-            history, activity = self._research_parts(
-                connection, _result_domain_key(result)
-            )
-            result = attach_research_context(result, history, activity)
-            connection.execute(
-                crawl_results.update()
-                .where(crawl_results.c.id == result_id)
-                .values(
-                    recommendation=result.recommendation,
-                    result_json=json.dumps(jsonable_result(result)),
-                )
-            )
             if job_id:
-                if not job_row_id:
-                    raise ValueError("job_row_id is required for batch results")
-                summaries = [*result.evidence_summaries, "", ""][:3]
-                connection.execute(
-                    crawl_job_rows.update()
-                    .where(crawl_job_rows.c.id == job_row_id)
-                    .where(crawl_job_rows.c.job_id == job_id)
-                    .values(
-                        status=result.status,
-                        result_id=result_id,
-                        icp_classification=result.ad_infrastructure_result,
-                        evidence_1=summaries[0],
-                        evidence_2=summaries[1],
-                        evidence_3=summaries[2],
-                        error=result.error,
-                    )
-                )
-                failed = result.status in {"CRAWL_FAILED", "INCONCLUSIVE"}
-                row = connection.execute(
-                    select(
-                        crawl_jobs.c.completed_domains,
-                        crawl_jobs.c.failed_domains,
-                        crawl_jobs.c.total_domains,
-                    ).where(crawl_jobs.c.id == job_id)
-                ).one()
-                completed = row.completed_domains + 1
-                values = {
-                    "completed_domains": completed,
-                    "failed_domains": row.failed_domains + int(failed),
-                }
-                if completed >= row.total_domains:
-                    values["status"] = "COMPLETED"
-                connection.execute(
-                    crawl_jobs.update().where(crawl_jobs.c.id == job_id).values(**values)
-                )
+                self._complete_job_row(connection, job_id, job_row_id, result_id, result)
         return StoredResult(result_id=result_id, job_id=job_id, result=result)
+
+    def link_job_row_result(self, job_id: str, job_row_id: str, stored: StoredResult) -> None:
+        """Finish a duplicate-website row with a scan already saved in this job."""
+        with self._lock, self.engine.begin() as connection:
+            self._complete_job_row(
+                connection, job_id, job_row_id, stored.result_id, stored.result
+            )
+
+    def _complete_job_row(
+        self,
+        connection,
+        job_id: str,
+        job_row_id: str,
+        result_id: str,
+        result: AnalysisResult,
+    ) -> None:
+        summaries = [*result.evidence_summaries, "", ""][:3]
+        connection.execute(
+            crawl_job_rows.update()
+            .where(crawl_job_rows.c.id == job_row_id)
+            .where(crawl_job_rows.c.job_id == job_id)
+            .values(
+                status=result.status,
+                result_id=result_id,
+                icp_classification=result.ad_infrastructure_result,
+                evidence_1=summaries[0],
+                evidence_2=summaries[1],
+                evidence_3=summaries[2],
+                error=result.error,
+            )
+        )
+        self._increment_job(
+            connection, job_id, failed=result.status in {"CRAWL_FAILED", "INCONCLUSIVE"}
+        )
 
     def mark_job_row_running(self, job_id: str, row_id: str) -> None:
         with self._lock, self.engine.begin() as connection:
@@ -748,6 +759,9 @@ class CrawlStore:
         if metadata is None:
             return None
         with self.engine.connect() as connection:
+            total_rows = connection.execute(
+                select(crawl_jobs.c.total_domains).where(crawl_jobs.c.id == job_id)
+            ).scalar_one()
             rows = (
                 connection.execute(
                     select(
@@ -781,7 +795,7 @@ class CrawlStore:
             job_id=job_id,
             website_column=metadata["website_column"],
             source_columns=metadata["source_columns"],
-            total_rows=len(metadata["domains"]),
+            total_rows=total_rows,
             rows=[
                 self._job_row_model(
                     row,
@@ -817,7 +831,22 @@ class CrawlStore:
             for row in rows
         ]
 
+    def iter_job_rows(self, job_id: str, *, chunk_size: int = 500):
+        """Yield a job's rows page by page so exports never load a whole job."""
+        offset = 0
+        while True:
+            page = self.get_job_rows(job_id, offset=offset, limit=chunk_size)
+            if page is None or not page.rows:
+                return
+            yield page
+            offset += len(page.rows)
+            if offset >= page.total_rows:
+                return
+
     def _get_job_metadata(self, job_id: str) -> dict | None:
+        cached = self._job_metadata_cache.get(job_id)
+        if cached is not None:
+            return cached
         with self.engine.connect() as connection:
             value = connection.execute(
                 select(crawl_jobs.c.input_json).where(crawl_jobs.c.id == job_id)
@@ -826,12 +855,16 @@ class CrawlStore:
             return None
         parsed = json.loads(value)
         if isinstance(parsed, list):
-            return {
-                "domains": parsed,
-                "source_columns": ["Website"],
-                "website_column": "Website",
-            }
-        return parsed
+            parsed = {}
+        # Keep only the small fields; the domain list can hold 25k entries.
+        metadata = {
+            "source_columns": parsed.get("source_columns") or ["Website"],
+            "website_column": parsed.get("website_column") or "Website",
+        }
+        if len(self._job_metadata_cache) >= 256:
+            self._job_metadata_cache.clear()
+        self._job_metadata_cache[job_id] = metadata
+        return metadata
 
     @staticmethod
     def _job_row_model(row, result: AnalysisResult | None = None) -> JobRow:
