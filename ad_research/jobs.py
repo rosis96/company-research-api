@@ -84,16 +84,36 @@ class JobRunner:
                             extra={"job_id": job_id, "domain": domain},
                         )
                         for row_id, _ in group:
-                            if row_id not in finished:
+                            if row_id in finished:
+                                continue
+                            # A failure here (e.g. a dropped database
+                            # connection) must not escape: one worker dying
+                            # used to end the whole batch and mark every
+                            # uncrawled row as failed.
+                            try:
                                 self.store.fail_job_row(
                                     job_id, row_id, f"{type(exc).__name__}: {exc}"
+                                )
+                            except Exception:
+                                log.exception(
+                                    "could not record failed batch row",
+                                    extra={"job_id": job_id, "row_id": row_id},
                                 )
                     finally:
                         queue.task_done()
 
             worker_count = min(self.concurrency, len(groups))
             if worker_count:
-                await asyncio.gather(*(worker() for _ in range(worker_count)))
+                # Wait for every worker even if one dies, so the remaining rows
+                # keep being crawled instead of being written off immediately.
+                outcomes = await asyncio.gather(
+                    *(worker() for _ in range(worker_count)), return_exceptions=True
+                )
+                for outcome in outcomes:
+                    if isinstance(outcome, asyncio.CancelledError):
+                        raise outcome
+                    if isinstance(outcome, BaseException):
+                        log.error("batch worker stopped", exc_info=outcome)
             current = self.store.get_job(job_id)
             if current and current.completed_domains < current.total_domains:
                 self.store.fail_unfinished_job(job_id, "batch ended before every row completed")
