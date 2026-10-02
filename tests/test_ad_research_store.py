@@ -134,3 +134,41 @@ def test_website_key_merges_only_the_same_site() -> None:
     assert _website_key("one.test") != _website_key("shop.one.test")
     assert _website_key("one.test/uk") != _website_key("one.test")
     assert _website_key("") == ""
+
+
+async def test_one_unrecordable_failure_does_not_stop_the_batch(tmp_path) -> None:
+    import asyncio
+
+    from ad_research.jobs import JobRunner
+
+    store = CrawlStore(f"sqlite:///{tmp_path / 'test.db'}")
+    store.create_schema()
+    domains = [f"site{i}.test" for i in range(40)]
+    job = store.create_job(domains)
+    crawled: list[str] = []
+
+    class Detector:
+        async def analyze(self, domain, landing_page_urls=None):
+            await asyncio.sleep(0.001)
+            crawled.append(domain)
+            if domain == "site3.test":
+                raise RuntimeError("browser crashed")
+            return result(domain)
+
+    original_fail = store.fail_job_row
+
+    def flaky_fail(job_id, row_id, error):
+        if "browser crashed" in error:
+            raise ConnectionError("database connection dropped")
+        return original_fail(job_id, row_id, error)
+
+    store.fail_job_row = flaky_fail
+    runner = JobRunner(Detector(), store, concurrency=3)
+    await runner._run(job.job_id)
+
+    # Before the fix, the escaped ConnectionError ended the batch and every
+    # uncrawled website was written off as "batch worker stopped".
+    assert sorted(crawled) == sorted(domains)
+    rows = store.get_job_rows(job.job_id).rows
+    completed = [row for row in rows if row.status == "COMPLETED"]
+    assert len(completed) == 39
