@@ -2,6 +2,9 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
+from sqlalchemy import inspect
+
+from ad_research.jobs import _website_key
 from ad_research.models import AnalysisResult
 from ad_research.store import CrawlStore
 
@@ -85,3 +88,49 @@ def test_runner_level_failure_finishes_every_remaining_row(tmp_path) -> None:
     rows = store.get_job_rows(job.job_id).rows
     assert all(row.status == "INCONCLUSIVE" for row in rows)
     assert all("browser worker crashed" in row.evidence_1 for row in rows)
+
+
+def test_schema_adds_job_indexes_to_existing_databases(tmp_path) -> None:
+    store = CrawlStore(f"sqlite:///{tmp_path / 'test.db'}")
+    store.create_schema()
+    with store.engine.begin() as connection:
+        connection.exec_driver_sql("DROP INDEX ix_ad_research_job_rows_job_order")
+    store.create_schema()  # a restart on an older database
+    names = {item["name"] for item in inspect(store.engine).get_indexes("ad_research_job_rows")}
+    assert {"ix_ad_research_job_rows_job_order", "ix_ad_research_job_rows_job_status"} <= names
+
+
+def test_duplicate_rows_share_one_scan_without_extra_history(tmp_path) -> None:
+    store = CrawlStore(f"sqlite:///{tmp_path / 'test.db'}")
+    store.create_schema()
+    job = store.create_job(["one.test", "https://www.one.test/", "two.test"])
+    rows = store.get_job_rows_for_run(job.job_id)
+    stored = store.save_result(result("one.test"), job.job_id, rows[0][0])
+    store.link_job_row_result(job.job_id, rows[1][0], stored)
+    store.save_result(result("two.test"), job.job_id, rows[2][0])
+
+    summary = store.get_job(job.job_id)
+    assert summary.completed_domains == 3
+    assert summary.status == "COMPLETED"
+    page = store.get_job_rows(job.job_id)
+    assert page.total_rows == 3
+    assert page.rows[0].result_id == page.rows[1].result_id == stored.result_id
+    assert page.rows[1].ad_infrastructure_result == "NO AD INFRA DETECTED"
+    # Linking a row is not another scan of the domain.
+    assert store.get_domain_research("one.test").history.total_scans == 1
+
+
+def test_iter_job_rows_pages_through_every_row(tmp_path) -> None:
+    store = CrawlStore(f"sqlite:///{tmp_path / 'test.db'}")
+    store.create_schema()
+    job = store.create_job([f"site{index}.test" for index in range(7)])
+    pages = list(store.iter_job_rows(job.job_id, chunk_size=3))
+    assert [len(page.rows) for page in pages] == [3, 3, 1]
+    assert [row.row_index for page in pages for row in page.rows] == list(range(7))
+
+
+def test_website_key_merges_only_the_same_site() -> None:
+    assert _website_key("one.test") == _website_key("https://WWW.one.test/")
+    assert _website_key("one.test") != _website_key("shop.one.test")
+    assert _website_key("one.test/uk") != _website_key("one.test")
+    assert _website_key("") == ""

@@ -30,7 +30,9 @@ def create_app(settings: AdResearchSettings | None = None) -> FastAPI:
         signatures = SignatureEngine(settings.signature_directory)
         guard = UrlGuard(GuardPolicy(max_redirect_hops=5))
         detector = AdvertisingDetector(settings, browser, guard, signatures)
-        jobs = JobRunner(detector, store, settings.concurrency)
+        jobs = JobRunner(
+            detector, store, settings.concurrency, dedupe=settings.dedupe_job_domains
+        )
 
         app.state.settings = settings
         app.state.store = store

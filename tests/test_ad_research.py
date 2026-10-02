@@ -8,7 +8,9 @@ from ad_research.classifier import classify_overall
 from ad_research.detector import (
     AdvertisingDetector,
     _accept_cookie_consent_in_root,
+    _blocked_after_homepage,
     _candidate_seed_urls,
+    _looks_like_bot_challenge,
 )
 from ad_research.models import (
     AnalysisResult,
@@ -315,3 +317,27 @@ class _FakeRoot:
 
     def get_by_role(self, _role):
         return _FakeButtons(self.button)
+
+
+def test_heavy_resource_filter_keeps_advertising_pixels() -> None:
+    engine = SignatureEngine(SIGNATURES)
+    assert engine.matches_network("https://www.facebook.com/tr?id=123&ev=PageView")
+    assert engine.matches_network("https://googleads.g.doubleclick.net/pagead/viewthroughconversion/1/")
+    assert not engine.matches_network("https://cdn.site.test/hero.jpg")
+
+
+def test_cdn_block_pages_served_with_200_are_bot_challenges() -> None:
+    assert _looks_like_bot_challenge("ERROR: The request could not be satisfied", "")
+    assert _looks_like_bot_challenge("Access Denied", "<p>https://errors.edgesuite.net/18.1</p>")
+    assert not _looks_like_bot_challenge("Eyewear Online", "<html>shop</html>")
+
+
+def test_homepage_only_crawl_with_refused_pages_is_detected() -> None:
+    home = PageDiagnostic(url="https://site.test/", page_role="homepage")
+    refused = [PageDiagnostic(url=f"https://site.test/{n}", error="HTTP 403") for n in range(3)]
+    missing = [PageDiagnostic(url=f"https://site.test/{n}", error="HTTP 404") for n in range(3)]
+    assert _blocked_after_homepage([home, *refused])
+    # A missing /pricing page is not a block, and one refusal is not a pattern.
+    assert not _blocked_after_homepage([home, *missing])
+    assert not _blocked_after_homepage([home, refused[0]])
+    assert not _blocked_after_homepage([home, refused[0], PageDiagnostic(url="https://site.test/ok")])

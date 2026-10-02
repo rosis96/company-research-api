@@ -67,6 +67,12 @@ For cold-outreach CSVs, the browser-observation label is:
   or connection refusal. Bot blocks, rate limits, TLS errors, and timeouts remain
   `INCONCLUSIVE` because they do not prove the website is inactive.
 
+CDN block pages that return HTTP 200 (Cloudflare, CloudFront, Akamai) are treated
+as bot challenges. A crawl where only the homepage loaded, every later page was
+refused with 403/429, and no advertising evidence was found is `INCONCLUSIVE`,
+not a negative: the site recognised the crawler. If advertising evidence was
+found on the homepage, the positive result stands.
+
 Actual advertising activity and Unicorn Marketers ICP qualification are separate
 downstream decisions. The activity layer can store dated, attributable evidence
 from Meta Ad Library, Google Ads Transparency Center, or another permitted
@@ -139,6 +145,11 @@ diagnostics.
 - `POST /api/results/{result_id}/rerun` — fresh standalone rerun
 - `GET /api/jobs/{job_id}/csv` — flattened download
 
+While crawling, the browser does not download images, fonts or media unless the
+URL matches an advertising signature, so image pixels such as `facebook.com/tr`
+still fire and are recorded (`AD_RESEARCH_BLOCK_HEAVY_RESOURCES=true`, the
+default). Every request is observed before this filter runs.
+
 Concurrency is process-wide and defaults to three simultaneous domains. One
 browser process is reused; every domain gets an isolated browser context. The
 future container deliberately runs one Uvicorn worker so the configured
@@ -147,9 +158,16 @@ concurrency and browser lifecycle remain real process-wide limits.
 ## Apollo and lead-list CSV behavior
 
 The uploaded file is stored as ordered job rows, not deduplicated domains. Every
-row receives its own row ID, crawl, result ID and output—even when ten rows share
-the same website. Names, emails and every other original column remain attached
-to that exact row. Jobs are isolated by job ID, so one uploaded file cannot use
+row receives its own row ID and output—even when ten rows share the same
+website. Names, emails and every other original column remain attached to that
+exact row.
+
+Within one job, each distinct website is crawled once and that one result is
+attached to every row that supplied it (`AD_RESEARCH_DEDUPE_JOB_DOMAINS=true`,
+the default). `company.com`, `https://www.company.com/` and `COMPANY.COM` count
+as the same website; different subdomains or paths are crawled separately. Apollo
+exports list one row per contact, so this typically removes most browser visits.
+Set the variable to `false` to crawl every row independently. Jobs are isolated by job ID, so one uploaded file cannot use
 or overwrite another file's rows.
 
 The default limit is 25,000 rows and 100 MB per CSV. The interface paginates

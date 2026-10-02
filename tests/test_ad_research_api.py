@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import time
 
+import pytest
 from fastapi.testclient import TestClient
 
 from ad_research.api import _output_column_names
@@ -114,8 +115,15 @@ def test_external_activity_evidence_is_a_separate_auditable_layer(tmp_path) -> N
         assert research["combined_activity_confidence"] == "MEDIUM"
 
 
-def test_csv_upload_preserves_original_rows_order_and_duplicate_websites(tmp_path) -> None:
-    settings = AdResearchSettings(database_url=f"sqlite:///{tmp_path / 'api.db'}", concurrency=2)
+@pytest.mark.parametrize("dedupe", [True, False])
+def test_csv_upload_preserves_original_rows_order_and_duplicate_websites(
+    tmp_path, dedupe: bool
+) -> None:
+    settings = AdResearchSettings(
+        database_url=f"sqlite:///{tmp_path / 'api.db'}",
+        concurrency=2,
+        dedupe_job_domains=dedupe,
+    )
     content = (
         "First Name,Email,Website\n"
         "Ada,ada@example.test,http://127.0.0.1\n"
@@ -146,8 +154,22 @@ def test_csv_upload_preserves_original_rows_order_and_duplicate_websites(tmp_pat
             "grace@example.test",
         ]
         assert all(row["result_id"] for row in page["rows"])
-        assert len({row["result_id"] for row in page["rows"]}) == 2
+        # With dedupe on, the repeated website is scanned once and both rows
+        # point at that one result; with it off, every row gets its own scan.
+        assert len({row["result_id"] for row in page["rows"]}) == (1 if dedupe else 2)
 
         exported = client.get(f"/api/jobs/{job_id}/csv").text
         assert "Ada,ada@example.test,http://127.0.0.1,INCONCLUSIVE" in exported
         assert "Grace,grace@example.test,http://127.0.0.1,INCONCLUSIVE" in exported
+
+
+def test_batch_limit_error_names_the_setting(tmp_path) -> None:
+    settings = AdResearchSettings(database_url=f"sqlite:///{tmp_path / 'api.db'}", max_batch_size=2)
+    with TestClient(create_app(settings)) as client:
+        response = client.post(
+            "/api/jobs/upload",
+            files={"file": ("big.csv", "Website\na.test\nb.test\nc.test\n", "text/csv")},
+        )
+    assert response.status_code == 422
+    assert "at most 2" in response.json()["detail"]
+    assert "AD_RESEARCH_MAX_BATCH_SIZE" in response.json()["detail"]
