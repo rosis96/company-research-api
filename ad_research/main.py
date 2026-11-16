@@ -59,13 +59,31 @@ def create_app(settings: AdResearchSettings | None = None) -> FastAPI:
                     removed["activity_evidence"],
                 )
 
+        async def resume_unfinished_jobs() -> None:
+            resumable_jobs = await asyncio.to_thread(store.jobs_to_resume)
+            for job_id in resumable_jobs:
+                jobs.start(job_id)
+            if resumable_jobs:
+                log.warning("resumed %s unfinished ad-research job(s)", len(resumable_jobs))
+
         async def cleanup_loop() -> None:
+            # The first pass purges before resuming, so an old stuck batch is not
+            # re-crawled on every restart. It runs in the background because on
+            # a large backlog the first purge can take minutes, and blocking
+            # startup on it makes the platform healthcheck time out.
             interval = max(1, settings.cleanup_interval_hours) * 3600
+            first_pass = True
             while True:
                 try:
                     await asyncio.to_thread(purge_once)
                 except Exception:
                     log.exception("scheduled retention cleanup failed")
+                if first_pass:
+                    first_pass = False
+                    try:
+                        await resume_unfinished_jobs()
+                    except Exception:
+                        log.exception("resuming unfinished ad-research jobs failed")
                 await asyncio.sleep(interval)
 
         app.state.settings = settings
@@ -75,14 +93,6 @@ def create_app(settings: AdResearchSettings | None = None) -> FastAPI:
         app.state.jobs = jobs
         app.state.version = __version__
         app.state.static_dir = Path(__file__).parent / "static"
-        # Clear anything already past its retention window before resuming work,
-        # so an old stuck batch is not re-crawled on every restart.
-        purge_once()
-        resumable_jobs = store.jobs_to_resume()
-        for job_id in resumable_jobs:
-            jobs.start(job_id)
-        if resumable_jobs:
-            log.warning("resumed %s unfinished ad-research job(s)", len(resumable_jobs))
         cleanup_task = asyncio.create_task(cleanup_loop(), name="ad-research-cleanup")
         try:
             yield
