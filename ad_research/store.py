@@ -322,50 +322,43 @@ class CrawlStore:
         results and external activity evidence are aged on their own timestamps.
         Children are removed before parents so the foreign keys stay satisfied on
         PostgreSQL as well as SQLite.
+
+        Expired rows are selected with subqueries instead of materialised id
+        lists: a large backlog passed to ``IN (...)`` exceeds PostgreSQL's 65535
+        bind-parameter limit and crashes startup.
         """
         if max_age_days <= 0:
             return {"jobs": 0, "results": 0, "activity_evidence": 0}
         cutoff = datetime.now(UTC) - timedelta(days=max_age_days)
         removed = {"jobs": 0, "results": 0, "activity_evidence": 0}
+        expired_jobs = select(crawl_jobs.c.id).where(crawl_jobs.c.created_at < cutoff)
+        expired_results = select(crawl_results.c.id).where(
+            crawl_results.c.job_id.in_(expired_jobs)
+            | (
+                crawl_results.c.job_id.is_(None)
+                & (crawl_results.c.completed_at < cutoff)
+            )
+        )
         with self._lock, self.engine.begin() as connection:
-            expired_job_ids = list(
-                connection.execute(
-                    select(crawl_jobs.c.id).where(crawl_jobs.c.created_at < cutoff)
-                ).scalars()
-            )
-            expired_result_ids = list(
-                connection.execute(
-                    select(crawl_results.c.id).where(
-                        crawl_results.c.job_id.in_(expired_job_ids)
-                        | (
-                            crawl_results.c.job_id.is_(None)
-                            & (crawl_results.c.completed_at < cutoff)
-                        )
-                    )
-                ).scalars()
-            )
-            if expired_result_ids:
-                connection.execute(
-                    domain_scans.delete().where(
-                        domain_scans.c.result_id.in_(expired_result_ids)
-                    )
+            expired_job_ids = list(connection.execute(expired_jobs).scalars())
+            connection.execute(
+                domain_scans.delete().where(
+                    domain_scans.c.result_id.in_(expired_results)
                 )
-            if expired_job_ids:
-                connection.execute(
-                    crawl_job_rows.delete().where(
-                        crawl_job_rows.c.job_id.in_(expired_job_ids)
-                    )
+            )
+            connection.execute(
+                crawl_job_rows.delete().where(
+                    crawl_job_rows.c.job_id.in_(expired_jobs)
                 )
-            if expired_result_ids:
-                removed["results"] = connection.execute(
-                    crawl_results.delete().where(
-                        crawl_results.c.id.in_(expired_result_ids)
-                    )
-                ).rowcount or 0
-            if expired_job_ids:
-                removed["jobs"] = connection.execute(
-                    crawl_jobs.delete().where(crawl_jobs.c.id.in_(expired_job_ids))
-                ).rowcount or 0
+            )
+            removed["results"] = connection.execute(
+                crawl_results.delete().where(
+                    crawl_results.c.id.in_(expired_results)
+                )
+            ).rowcount or 0
+            removed["jobs"] = connection.execute(
+                crawl_jobs.delete().where(crawl_jobs.c.created_at < cutoff)
+            ).rowcount or 0
             removed["activity_evidence"] = connection.execute(
                 activity_evidence.delete().where(activity_evidence.c.created_at < cutoff)
             ).rowcount or 0
