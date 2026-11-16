@@ -315,6 +315,39 @@ class CrawlStore:
                     )
                 )
 
+    def delete_job(self, job_id: str) -> bool:
+        """Permanently delete one batch: its rows, results and scans.
+
+        Used by the manual "delete" button once the user has downloaded what
+        they need. Children are removed before parents so the foreign keys stay
+        satisfied on PostgreSQL as well as SQLite.
+        """
+        with self._lock, self.engine.begin() as connection:
+            exists = connection.execute(
+                select(crawl_jobs.c.id).where(crawl_jobs.c.id == job_id)
+            ).first()
+            if not exists:
+                return False
+            result_ids = list(
+                connection.execute(
+                    select(crawl_results.c.id).where(crawl_results.c.job_id == job_id)
+                ).scalars()
+            )
+            if result_ids:
+                connection.execute(
+                    domain_scans.delete().where(domain_scans.c.result_id.in_(result_ids))
+                )
+            connection.execute(
+                crawl_job_rows.delete().where(crawl_job_rows.c.job_id == job_id)
+            )
+            if result_ids:
+                connection.execute(
+                    crawl_results.delete().where(crawl_results.c.id.in_(result_ids))
+                )
+            connection.execute(crawl_jobs.delete().where(crawl_jobs.c.id == job_id))
+        self._job_metadata_cache.pop(job_id, None)
+        return True
+
     def purge_expired(self, max_age_days: int) -> dict[str, int]:
         """Delete research older than ``max_age_days`` and report what was removed.
 

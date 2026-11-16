@@ -3,7 +3,7 @@ from __future__ import annotations
 import csv
 import io
 
-from fastapi import APIRouter, HTTPException, Query, Request, UploadFile
+from fastapi import APIRouter, HTTPException, Query, Request, Response, UploadFile
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse, StreamingResponse
 
@@ -128,6 +128,19 @@ async def get_job(job_id: str, request: Request) -> JobSummary:
     if not job:
         raise HTTPException(404, "job not found")
     return job
+
+
+@router.delete("/api/jobs/{job_id}", status_code=204)
+async def delete_job(job_id: str, request: Request) -> Response:
+    store = request.app.state.store
+    if not store.get_job(job_id):
+        raise HTTPException(404, "job not found")
+    # Stop the crawl first so no result is written to a row we are deleting.
+    await request.app.state.jobs.cancel(job_id)
+    deleted = await run_in_threadpool(store.delete_job, job_id)
+    if not deleted:
+        raise HTTPException(404, "job not found")
+    return Response(status_code=204)
 
 
 @router.get("/api/jobs/{job_id}/rows", response_model=JobRowsPage)
