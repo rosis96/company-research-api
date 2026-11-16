@@ -8,8 +8,12 @@ ENV PYTHONUNBUFFERED=1 \
 
 WORKDIR /srv/app
 
+# libatomic1 must be present before `playwright install` runs: Playwright's
+# bundled Node binary is dynamically linked against libatomic.so.1, which the
+# slim base image does not ship, so without it the install step dies with
+# "error while loading shared libraries: libatomic.so.1" (exit 127).
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates curl tini \
+    && apt-get install -y --no-install-recommends ca-certificates curl tini libatomic1 \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt ./
