@@ -173,3 +173,24 @@ def test_batch_limit_error_names_the_setting(tmp_path) -> None:
     assert response.status_code == 422
     assert "at most 2" in response.json()["detail"]
     assert "AD_RESEARCH_MAX_BATCH_SIZE" in response.json()["detail"]
+
+
+def test_delete_job_endpoint_removes_job_and_allows_partial_csv(tmp_path) -> None:
+    settings = AdResearchSettings(database_url=f"sqlite:///{tmp_path / 'api.db'}", concurrency=2)
+    with TestClient(create_app(settings)) as client:
+        job_id = client.post(
+            "/api/jobs", json={"domains": ["http://127.0.0.1", "http://0x7f000001"]}
+        ).json()["job_id"]
+        for _ in range(50):
+            job = client.get(f"/api/jobs/{job_id}").json()
+            if job["status"] in {"COMPLETED", "INCONCLUSIVE"}:
+                break
+            time.sleep(0.02)
+
+        # CSV export is reachable regardless of completion (partial download).
+        assert client.get(f"/api/jobs/{job_id}/csv").status_code == 200
+
+        deleted = client.delete(f"/api/jobs/{job_id}")
+        assert deleted.status_code == 204
+        assert client.get(f"/api/jobs/{job_id}").status_code == 404
+        assert client.delete(f"/api/jobs/{job_id}").status_code == 404

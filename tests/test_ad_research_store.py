@@ -242,3 +242,32 @@ def test_purge_expired_is_noop_when_retention_disabled(tmp_path) -> None:
     assert removed == {"jobs": 0, "results": 0, "activity_evidence": 0}
     assert store.get_job(job.job_id) is not None
     store.dispose()
+
+
+def test_delete_job_removes_rows_results_and_scans(tmp_path) -> None:
+    from sqlalchemy import func, select
+
+    from ad_research.store import (
+        crawl_job_rows,
+        crawl_jobs,
+        crawl_results,
+        domain_scans,
+    )
+
+    store = CrawlStore(f"sqlite:///{tmp_path / 'test.db'}")
+    store.create_schema()
+    job = store.create_job(["one.test", "two.test"])
+    rows = store.get_job_rows_for_run(job.job_id)
+    store.save_result(result("one.test"), job.job_id, rows[0][0])
+    # Leave the second row un-crawled on purpose (partial-job delete).
+
+    assert store.delete_job(job.job_id) is True
+    assert store.get_job(job.job_id) is None
+    assert store.delete_job(job.job_id) is False  # already gone
+
+    with store.engine.connect() as connection:
+        for table in (crawl_jobs, crawl_job_rows, crawl_results, domain_scans):
+            assert connection.execute(
+                select(func.count()).select_from(table)
+            ).scalar_one() == 0
+    store.dispose()

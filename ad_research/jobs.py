@@ -142,6 +142,20 @@ class JobRunner:
             log.exception("batch runner failed", extra={"job_id": job_id})
             self.store.fail_unfinished_job(job_id, f"{type(exc).__name__}: {exc}")
 
+    async def cancel(self, job_id: str) -> bool:
+        """Stop a running batch so its job can be deleted without stray writes.
+
+        Awaits the cancelled task so no in-flight result is written to a job row
+        that is about to be removed.
+        """
+        name = f"ad-research-{job_id}"
+        targets = [task for task in self._tasks if task.get_name() == name]
+        for task in targets:
+            task.cancel()
+        if targets:
+            await asyncio.gather(*targets, return_exceptions=True)
+        return bool(targets)
+
     async def drain(self, timeout: float = 5.0) -> None:
         if not self._tasks:
             return
