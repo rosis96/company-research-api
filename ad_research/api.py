@@ -4,6 +4,7 @@ import csv
 import io
 
 from fastapi import APIRouter, HTTPException, Query, Request, UploadFile
+from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse, StreamingResponse
 
 from ad_research.models import (
@@ -69,8 +70,8 @@ async def domain_research(domain: str, request: Request) -> DomainResearchSummar
 async def create_job(payload: BatchRequest, request: Request) -> JobCreated:
     settings = request.app.state.settings
     if len(payload.domains) > settings.max_batch_size:
-        raise HTTPException(422, f"maximum batch size is {settings.max_batch_size} domains")
-    job = request.app.state.store.create_job(payload.domains)
+        raise HTTPException(422, _batch_limit_message(len(payload.domains), settings))
+    job = await run_in_threadpool(request.app.state.store.create_job, payload.domains)
     request.app.state.jobs.start(job.job_id)
     return JobCreated(
         job_id=job.job_id,
@@ -96,12 +97,16 @@ async def upload_job(request: Request, file: UploadFile) -> JobCreated:
         limit_mb = settings.max_upload_bytes // 1_000_000
         raise HTTPException(413, f"CSV file is too large; maximum upload is {limit_mb} MB")
     try:
-        columns, website_column, rows, domains = _parse_csv(raw.decode("utf-8-sig"))
+        text = raw.decode("utf-8-sig")
     except UnicodeDecodeError as exc:
         raise HTTPException(422, "CSV must be UTF-8 encoded") from exc
+    # Parsing and inserting 25k rows takes long enough to stall live crawls if
+    # it ran on the event loop.
+    columns, website_column, rows, domains = await run_in_threadpool(_parse_csv, text)
     if len(domains) > settings.max_batch_size:
-        raise HTTPException(422, f"maximum batch size is {settings.max_batch_size} rows")
-    job = request.app.state.store.create_job(
+        raise HTTPException(422, _batch_limit_message(len(domains), settings))
+    job = await run_in_threadpool(
+        request.app.state.store.create_job,
         domains,
         source_rows=rows,
         source_columns=columns,
@@ -132,7 +137,9 @@ async def get_job_rows(
     offset: int = Query(default=0, ge=0),
     limit: int = Query(default=500, ge=1, le=500),
 ) -> JobRowsPage:
-    rows = request.app.state.store.get_job_rows(job_id, offset=offset, limit=limit)
+    rows = await run_in_threadpool(
+        request.app.state.store.get_job_rows, job_id, offset=offset, limit=limit
+    )
     if rows is None:
         raise HTTPException(404, "job not found")
     return rows
@@ -157,43 +164,69 @@ async def rerun_result(result_id: str, request: Request) -> StoredResult:
 
 @router.get("/api/jobs/{job_id}/csv")
 async def export_job_csv(job_id: str, request: Request) -> StreamingResponse:
-    job = request.app.state.store.get_job(job_id)
+    store = request.app.state.store
+    job = store.get_job(job_id)
     if not job:
         raise HTTPException(404, "job not found")
-    page = request.app.state.store.get_job_rows(job_id, limit=job.total_domains)
-    if page is None:
+    first = store.get_job_rows(job_id, limit=1)
+    if first is None:
         raise HTTPException(404, "job not found")
-    stream = io.StringIO()
-    output_names = _output_column_names(page.source_columns)
-    fieldnames = [*page.source_columns, *output_names.values()]
-    writer = csv.DictWriter(stream, fieldnames=fieldnames, lineterminator="\n")
-    writer.writeheader()
-    for row in page.rows:
-        output = dict(row.original_data)
-        output.update(
-            {
-                output_names["classification"]: row.ad_infrastructure_result,
-                output_names["primary_confidence"]: row.primary_advertising_confidence,
-                output_names["infrastructure_confidence"]: row.infrastructure_confidence,
-                output_names["infrastructure_freshness"]: row.infrastructure_freshness,
-                output_names["activity"]: row.current_ad_activity,
-                output_names["combined_confidence"]: row.combined_activity_confidence,
-                output_names["detected_platforms"]: ", ".join(row.detected_platforms),
-                output_names["runtime_platforms"]: ", ".join(row.runtime_platforms),
-                output_names["pages_crawled"]: row.pages_crawled,
-                output_names["scan_count"]: row.scan_count,
-                output_names["last_runtime"]: (
-                    row.last_runtime_signal_at.isoformat() if row.last_runtime_signal_at else ""
-                ),
-                output_names["evidence_1"]: row.evidence_1,
-                output_names["evidence_2"]: row.evidence_2,
-                output_names["evidence_3"]: row.evidence_3,
-                output_names["error_notes"]: row.error or "",
-            }
-        )
-        writer.writerow(output)
+    output_names = _output_column_names(first.source_columns)
+    fieldnames = [*first.source_columns, *output_names.values()]
+
+    def generate():
+        # A sync generator runs in Starlette's thread pool, and each chunk holds
+        # at most 500 rows, so a 25k-row export neither blocks crawls nor has to
+        # fit in memory.
+        stream = io.StringIO()
+        writer = csv.DictWriter(stream, fieldnames=fieldnames, lineterminator="\n")
+        writer.writeheader()
+        for page in store.iter_job_rows(job_id):
+            for row in page.rows:
+                writer.writerow(_export_row(row, output_names))
+            yield stream.getvalue()
+            stream.seek(0)
+            stream.truncate(0)
+        if stream.tell():
+            yield stream.getvalue()
+
     headers = {"Content-Disposition": f'attachment; filename="{job_id}.csv"'}
-    return StreamingResponse(iter([stream.getvalue()]), media_type="text/csv", headers=headers)
+    return StreamingResponse(generate(), media_type="text/csv", headers=headers)
+
+
+def _export_row(row, output_names: dict[str, str]) -> dict:
+    output = dict(row.original_data)
+    output.update(
+        {
+            output_names["classification"]: row.ad_infrastructure_result,
+            output_names["primary_confidence"]: row.primary_advertising_confidence,
+            output_names["infrastructure_confidence"]: row.infrastructure_confidence,
+            output_names["infrastructure_freshness"]: row.infrastructure_freshness,
+            output_names["activity"]: row.current_ad_activity,
+            output_names["combined_confidence"]: row.combined_activity_confidence,
+            output_names["detected_platforms"]: ", ".join(row.detected_platforms),
+            output_names["runtime_platforms"]: ", ".join(row.runtime_platforms),
+            output_names["pages_crawled"]: row.pages_crawled,
+            output_names["scan_count"]: row.scan_count,
+            output_names["last_runtime"]: (
+                row.last_runtime_signal_at.isoformat() if row.last_runtime_signal_at else ""
+            ),
+            output_names["evidence_1"]: row.evidence_1,
+            output_names["evidence_2"]: row.evidence_2,
+            output_names["evidence_3"]: row.evidence_3,
+            output_names["error_notes"]: row.error or "",
+        }
+    )
+    return output
+
+
+def _batch_limit_message(count: int, settings) -> str:
+    # Name the variable: an old Railway value silently overriding the code
+    # default was the reason uploads stopped at 5,000 rows.
+    return (
+        f"This batch has {count:,} rows but this server accepts at most "
+        f"{settings.max_batch_size:,}. Raise AD_RESEARCH_MAX_BATCH_SIZE to allow more."
+    )
 
 
 def _parse_csv(content: str) -> tuple[list[str], str, list[dict[str, str]], list[str]]:

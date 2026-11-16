@@ -31,7 +31,7 @@
     </section>
     <section class="card">
       <label for="csv">Upload Apollo or lead-list CSV</label>
-      <div class="upload"><input id="csv" type="file" accept=".csv,text/csv"><p id="uploadLimit" class="hint">Supports up to 25,000 rows per file. The file starts immediately; original columns, row order, and duplicates are preserved.</p></div>
+      <div class="upload"><input id="csv" type="file" accept=".csv,text/csv"><p id="uploadLimit" class="hint">Checking this server's upload limit… The file starts immediately; original columns, row order, and duplicates are preserved.</p></div>
       <details><summary>Or enter websites manually</summary><textarea id="batch" placeholder="company-one.com&#10;company-one.com&#10;company-two.com"></textarea><button id="startBatch">Start manual batch</button></details>
     </section>
   </div>
@@ -68,7 +68,7 @@ async function poll(id){if(activeJob!==id)return;try{const[job,page]=await Promi
 function changePage(direction){activeOffset=Math.max(0,activeOffset+direction*PAGE_SIZE);poll(activeJob)}
 async function viewResult(id){try{show(resultView(await api('/api/results/'+id)))}catch(error){show(`<p class="error">${esc(error.message)}</p>`)}}async function rerun(id){show('<p>Rerunning website…</p>');try{show(resultView(await api(`/api/results/${id}/rerun`,{method:'POST'})))}catch(error){show(`<p class="error">${esc(error.message)}</p>`)}}
 async function restoreJob(){let id=localStorage.getItem(JOB_KEY);if(!id){try{const jobs=await api('/api/jobs?limit=1');if(jobs.length)id=jobs[0].job_id}catch(_){return}}if(id){rememberJob(id);poll(id)}}
-async function showConfiguredLimits(){try{const health=await api('/api/health'),rows=Number(health.max_batch_size||25000).toLocaleString(),mb=Math.floor(Number(health.max_upload_bytes||100000000)/1000000);$('uploadLimit').textContent=`Supports up to ${rows} rows or ${mb} MB per file. The file starts immediately; original columns, row order, and duplicates are preserved.`}catch(_){}}
+async function showConfiguredLimits(){const tail=' The file starts immediately; original columns, row order, and duplicates are preserved.';try{const health=await api('/api/health');if(health.max_batch_size==null)throw new Error('limit not reported');const rows=Number(health.max_batch_size).toLocaleString(),mb=Math.floor(Number(health.max_upload_bytes)/1000000);$('uploadLimit').textContent=`This server accepts up to ${rows} rows or ${mb} MB per file.`+tail}catch(_){$('uploadLimit').textContent="Could not read this server's upload limit; oversized files will be rejected with the exact limit."+tail}}
 showConfiguredLimits();
 restoreJob();
 </script>

@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
-import resource
 import sys
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
@@ -19,6 +18,11 @@ from ad_research.signature_engine import SignatureEngine
 from app.security.domains import registrable_domain
 from app.security.reasons import ReasonCode
 from app.security.url_guard import CrawlScope, GuardError, UrlGuard, coerce_input_url
+
+try:
+    import resource
+except ImportError:  # Windows has no resource module; RSS logging is diagnostic only.
+    resource = None
 
 log = logging.getLogger(__name__)
 
@@ -41,6 +45,7 @@ _PRIORITY_PATHS = {
     "how-it-works": 82,
     "contact": 80,
 }
+_HEAVY_RESOURCE_TYPES = frozenset({"image", "media", "font"})
 _FALLBACK_PATHS = ("/pricing", "/products", "/services", "/contact")
 _AVOID_SECONDARY_PATHS = (
     "/blog",
@@ -61,7 +66,11 @@ _BOT_MARKERS = (
     "attention required! | cloudflare",
     "cf-chl-",
     "challenge-platform",
+    # CloudFront and Akamai block pages are often served with HTTP 200.
+    "the request could not be satisfied",
+    "errors.edgesuite.net",
 )
+_BLOCKED_PAGE_MARKERS = ("HTTP 403", "HTTP 429", "bot-protection")
 _CONSENT_SELECTORS = (
     "#onetrust-accept-btn-handler",
     "#CybotCookiebotDialogBodyLevelButtonLevelOptinAllowAll",
@@ -397,7 +406,7 @@ class AdvertisingDetector:
             status = "COMPLETED" if successful else "CRAWL_FAILED"
             if len(successful) == 1 and any(item.error for item in pages[1:]):
                 notes.append("Only the homepage could be inspected; secondary pages failed.")
-            return self._build_result(
+            result = self._build_result(
                 requested_url=requested_url,
                 seed_url=seed_url,
                 final_url=final_url,
@@ -408,6 +417,28 @@ class AdvertisingDetector:
                 status=status,
                 landing_pages_requested=landing_page_urls,
             )
+            if (
+                result.advertising_infrastructure_confidence == "NONE"
+                and _blocked_after_homepage(pages)
+            ):
+                # The site let the first request through and then refused the
+                # crawler. Finding nothing on one page is not a negative result.
+                return self._build_result(
+                    requested_url=requested_url,
+                    seed_url=seed_url,
+                    final_url=final_url,
+                    started=started,
+                    pages=pages,
+                    observations=observations,
+                    notes=notes,
+                    status="INCONCLUSIVE",
+                    error=(
+                        "bot-protection blocked every page after the homepage "
+                        "and no advertising evidence was found on the homepage"
+                    ),
+                    landing_pages_requested=landing_page_urls,
+                )
+            return result
         finally:
             try:
                 await context.close()
@@ -458,6 +489,16 @@ class AdvertisingDetector:
                 await route.continue_()
                 return
             if not url.startswith(("http://", "https://")):
+                await route.abort()
+                return
+            # Images, fonts and media only slow the crawl down. The request event
+            # has already been recorded, and anything matching an advertising
+            # rule (image pixels such as facebook.com/tr) is still allowed.
+            if (
+                self.settings.block_heavy_resources
+                and request.resource_type in _HEAVY_RESOURCE_TYPES
+                and not self.signatures.matches_network(url)
+            ):
                 await route.abort()
                 return
             allowed = await allow_request(url, request.resource_type == "document")
@@ -801,6 +842,20 @@ def _choose_targets(homepage: str, discovered: list[tuple[int, str]], max_pages:
     return targets
 
 
+def _blocked_after_homepage(pages: list[PageDiagnostic]) -> bool:
+    """Only the homepage loaded and at least two later pages were refused."""
+    later = pages[1:]
+    return (
+        bool(pages)
+        and not pages[0].error
+        and len(later) >= 2
+        and all(
+            page.error and any(marker in page.error for marker in _BLOCKED_PAGE_MARKERS)
+            for page in later
+        )
+    )
+
+
 def _looks_like_bot_challenge(title: str, html: str) -> bool:
     sample = f"{title}\n{html[:100_000]}".lower()
     return any(marker in sample for marker in _BOT_MARKERS)
@@ -811,6 +866,8 @@ def _dedupe(values: list[str]) -> list[str]:
 
 
 def _rss_mb() -> float:
+    if resource is None:
+        return 0.0
     usage = float(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss)
     # macOS reports bytes; Linux (including Railway containers) reports KiB.
     return usage / (1024 * 1024) if sys.platform == "darwin" else usage / 1024
