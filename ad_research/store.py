@@ -130,6 +130,8 @@ _INDEXES = (
     Index("ix_ad_research_job_rows_job_order", crawl_job_rows.c.job_id, crawl_job_rows.c.row_index),
     Index("ix_ad_research_job_rows_job_status", crawl_job_rows.c.job_id, crawl_job_rows.c.status),
     Index("ix_ad_research_crawl_results_job", crawl_results.c.job_id),
+    # Lets deletes from crawl_results check this foreign key without a table scan.
+    Index("ix_ad_research_job_rows_result", crawl_job_rows.c.result_id),
 )
 
 
