@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import threading
 import uuid
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from urllib.parse import urlsplit
 
 from sqlalchemy import (
@@ -314,6 +314,64 @@ class CrawlStore:
                         failed_domains=min(job.total_domains, job.failed_domains + len(unfinished)),
                     )
                 )
+
+    def purge_expired(self, max_age_days: int) -> dict[str, int]:
+        """Delete research older than ``max_age_days`` and report what was removed.
+
+        Batches are tied to their job's ``created_at``; standalone single-site
+        results and external activity evidence are aged on their own timestamps.
+        Children are removed before parents so the foreign keys stay satisfied on
+        PostgreSQL as well as SQLite.
+        """
+        if max_age_days <= 0:
+            return {"jobs": 0, "results": 0, "activity_evidence": 0}
+        cutoff = datetime.now(UTC) - timedelta(days=max_age_days)
+        removed = {"jobs": 0, "results": 0, "activity_evidence": 0}
+        with self._lock, self.engine.begin() as connection:
+            expired_job_ids = list(
+                connection.execute(
+                    select(crawl_jobs.c.id).where(crawl_jobs.c.created_at < cutoff)
+                ).scalars()
+            )
+            expired_result_ids = list(
+                connection.execute(
+                    select(crawl_results.c.id).where(
+                        crawl_results.c.job_id.in_(expired_job_ids)
+                        | (
+                            crawl_results.c.job_id.is_(None)
+                            & (crawl_results.c.completed_at < cutoff)
+                        )
+                    )
+                ).scalars()
+            )
+            if expired_result_ids:
+                connection.execute(
+                    domain_scans.delete().where(
+                        domain_scans.c.result_id.in_(expired_result_ids)
+                    )
+                )
+            if expired_job_ids:
+                connection.execute(
+                    crawl_job_rows.delete().where(
+                        crawl_job_rows.c.job_id.in_(expired_job_ids)
+                    )
+                )
+            if expired_result_ids:
+                removed["results"] = connection.execute(
+                    crawl_results.delete().where(
+                        crawl_results.c.id.in_(expired_result_ids)
+                    )
+                ).rowcount or 0
+            if expired_job_ids:
+                removed["jobs"] = connection.execute(
+                    crawl_jobs.delete().where(crawl_jobs.c.id.in_(expired_job_ids))
+                ).rowcount or 0
+            removed["activity_evidence"] = connection.execute(
+                activity_evidence.delete().where(activity_evidence.c.created_at < cutoff)
+            ).rowcount or 0
+        for job_id in expired_job_ids:
+            self._job_metadata_cache.pop(job_id, None)
+        return removed
 
     def create_job(
         self,

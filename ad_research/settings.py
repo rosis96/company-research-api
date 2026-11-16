@@ -33,6 +33,13 @@ class AdResearchSettings(BaseSettings):
     recycle_after_domains: int = 100
     block_heavy_resources: bool = True
     dedupe_job_domains: bool = True
+    # Finished research is disposable: keep it a few days, then delete it so the
+    # database (and its Railway volume) does not grow without bound.
+    retention_days: int = 3
+    cleanup_interval_hours: int = 6
+    # Free the resident Chromium when no batch is running so an idle service does
+    # not keep paying for a browser's memory between uploads.
+    close_browser_when_idle: bool = True
     ignore_https_errors: bool = False
     user_agent: str = (
         "UnicornAdResearchBot/0.1 "

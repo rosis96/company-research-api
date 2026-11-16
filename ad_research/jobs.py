@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Awaitable, Callable
 from urllib.parse import urlsplit
 
 from ad_research.detector import AdvertisingDetector
@@ -19,6 +20,7 @@ class JobRunner:
         concurrency: int,
         *,
         dedupe: bool = True,
+        on_idle: Callable[[], Awaitable[None]] | None = None,
     ) -> None:
         self.detector = detector
         self.store = store
@@ -26,6 +28,9 @@ class JobRunner:
         self.dedupe = dedupe
         self.semaphore = asyncio.Semaphore(self.concurrency)
         self._tasks: set[asyncio.Task] = set()
+        # Called once the last running batch finishes, so the caller can release
+        # the resident browser and stop paying for its memory while idle.
+        self._on_idle = on_idle
 
     def start(self, job_id: str) -> None:
         task = asyncio.create_task(self._run(job_id), name=f"ad-research-{job_id}")
@@ -39,6 +44,20 @@ class JobRunner:
         error = task.exception()
         if error:
             log.error("batch runner escaped", exc_info=error)
+        if not self._tasks and self._on_idle is not None:
+            idle = asyncio.create_task(self._run_on_idle(), name="ad-research-idle")
+            self._tasks.add(idle)
+            idle.add_done_callback(self._tasks.discard)
+
+    async def _run_on_idle(self) -> None:
+        # Another batch may have been queued between the check and here; only
+        # release resources when nothing else is running.
+        if len(self._tasks) > 1 or self._on_idle is None:
+            return
+        try:
+            await self._on_idle()
+        except Exception:
+            log.exception("idle cleanup failed")
 
     async def analyze_one(self, domain: str, *, landing_urls: list[str] | None = None):
         stored_landings = self.store.get_landing_urls(domain)
