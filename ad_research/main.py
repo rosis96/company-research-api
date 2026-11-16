@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -30,9 +31,42 @@ def create_app(settings: AdResearchSettings | None = None) -> FastAPI:
         signatures = SignatureEngine(settings.signature_directory)
         guard = UrlGuard(GuardPolicy(max_redirect_hops=5))
         detector = AdvertisingDetector(settings, browser, guard, signatures)
+
+        log = logging.getLogger(__name__)
+
+        async def release_idle_browser() -> None:
+            if settings.close_browser_when_idle:
+                await browser.invalidate()
+                log.info("released idle Chromium; no batch is running")
+
         jobs = JobRunner(
-            detector, store, settings.concurrency, dedupe=settings.dedupe_job_domains
+            detector,
+            store,
+            settings.concurrency,
+            dedupe=settings.dedupe_job_domains,
+            on_idle=release_idle_browser,
         )
+
+        def purge_once() -> None:
+            removed = store.purge_expired(settings.retention_days)
+            if any(removed.values()):
+                log.info(
+                    "purged expired research older than %sd: %s job(s), %s result(s), "
+                    "%s activity record(s)",
+                    settings.retention_days,
+                    removed["jobs"],
+                    removed["results"],
+                    removed["activity_evidence"],
+                )
+
+        async def cleanup_loop() -> None:
+            interval = max(1, settings.cleanup_interval_hours) * 3600
+            while True:
+                try:
+                    await asyncio.to_thread(purge_once)
+                except Exception:
+                    log.exception("scheduled retention cleanup failed")
+                await asyncio.sleep(interval)
 
         app.state.settings = settings
         app.state.store = store
@@ -41,16 +75,23 @@ def create_app(settings: AdResearchSettings | None = None) -> FastAPI:
         app.state.jobs = jobs
         app.state.version = __version__
         app.state.static_dir = Path(__file__).parent / "static"
+        # Clear anything already past its retention window before resuming work,
+        # so an old stuck batch is not re-crawled on every restart.
+        purge_once()
         resumable_jobs = store.jobs_to_resume()
         for job_id in resumable_jobs:
             jobs.start(job_id)
         if resumable_jobs:
-            logging.getLogger(__name__).warning(
-                "resumed %s unfinished ad-research job(s)", len(resumable_jobs)
-            )
+            log.warning("resumed %s unfinished ad-research job(s)", len(resumable_jobs))
+        cleanup_task = asyncio.create_task(cleanup_loop(), name="ad-research-cleanup")
         try:
             yield
         finally:
+            cleanup_task.cancel()
+            try:
+                await cleanup_task
+            except asyncio.CancelledError:
+                pass
             await jobs.drain()
             await browser.close()
             store.dispose()

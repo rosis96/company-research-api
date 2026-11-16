@@ -172,3 +172,73 @@ async def test_one_unrecordable_failure_does_not_stop_the_batch(tmp_path) -> Non
     rows = store.get_job_rows(job.job_id).rows
     completed = [row for row in rows if row.status == "COMPLETED"]
     assert len(completed) == 39
+
+
+def test_purge_expired_removes_old_research_and_keeps_recent(tmp_path) -> None:
+    from datetime import timedelta
+
+    from ad_research.store import (
+        activity_evidence,
+        crawl_job_rows,
+        crawl_jobs,
+        crawl_results,
+        domain_scans,
+    )
+
+    store = CrawlStore(f"sqlite:///{tmp_path / 'test.db'}")
+    store.create_schema()
+
+    old_job = store.create_job(["old.test"])
+    old_row = store.get_job_rows_for_run(old_job.job_id)[0][0]
+    store.save_result(result("old.test"), old_job.job_id, old_row)
+
+    new_job = store.create_job(["new.test"])
+    new_row = store.get_job_rows_for_run(new_job.job_id)[0][0]
+    store.save_result(result("new.test"), new_job.job_id, new_row)
+
+    # Age the first job (and a standalone single-site result) past the window.
+    stale = datetime.now(UTC) - timedelta(days=10)
+    store.save_result(result("standalone.test"))  # job_id is NULL
+    with store.engine.begin() as connection:
+        connection.execute(
+            crawl_jobs.update()
+            .where(crawl_jobs.c.id == old_job.job_id)
+            .values(created_at=stale)
+        )
+        connection.execute(
+            crawl_results.update()
+            .where(crawl_results.c.job_id.is_(None))
+            .values(completed_at=stale)
+        )
+
+    removed = store.purge_expired(max_age_days=3)
+    assert removed["jobs"] == 1
+    assert removed["results"] >= 2  # batch result + standalone result
+
+    assert store.get_job(old_job.job_id) is None
+    assert store.get_job(new_job.job_id) is not None
+    with store.engine.connect() as connection:
+        from sqlalchemy import func, select
+
+        assert connection.execute(
+            select(func.count()).select_from(crawl_job_rows)
+        ).scalar_one() == 1
+        assert connection.execute(
+            select(func.count()).select_from(domain_scans)
+        ).scalar_one() == 1
+        assert connection.execute(
+            select(func.count()).select_from(activity_evidence)
+        ).scalar_one() == 0
+    store.dispose()
+
+
+def test_purge_expired_is_noop_when_retention_disabled(tmp_path) -> None:
+    store = CrawlStore(f"sqlite:///{tmp_path / 'test.db'}")
+    store.create_schema()
+    job = store.create_job(["keep.test"])
+    row = store.get_job_rows_for_run(job.job_id)[0][0]
+    store.save_result(result("keep.test"), job.job_id, row)
+    removed = store.purge_expired(max_age_days=0)
+    assert removed == {"jobs": 0, "results": 0, "activity_evidence": 0}
+    assert store.get_job(job.job_id) is not None
+    store.dispose()

@@ -103,23 +103,43 @@ class BrowserManager:
             await self._shutdown_locked()
 
     async def new_context(self) -> BrowserContext:
-        browser = await self._ensure_browser()
-        self._domains_since_restart += 1
-        return await browser.new_context(
-            user_agent=self.settings.user_agent,
-            accept_downloads=False,
-            java_script_enabled=True,
-            ignore_https_errors=self.settings.ignore_https_errors,
-            viewport={"width": 1365, "height": 900},
-            service_workers="allow",
-        )
+        # A crashed Chromium or Playwright driver used to stay cached, so every
+        # remaining row of a batch failed instantly. Relaunch once and retry.
+        for attempt in range(2):
+            browser = await self._ensure_browser()
+            self._domains_since_restart += 1
+            try:
+                return await browser.new_context(
+                    user_agent=self.settings.user_agent,
+                    accept_downloads=False,
+                    java_script_enabled=True,
+                    ignore_https_errors=self.settings.ignore_https_errors,
+                    viewport={"width": 1365, "height": 900},
+                    service_workers="allow",
+                )
+            except Exception as exc:
+                if attempt or not is_dead_browser_error(exc):
+                    raise
+                log.warning("Chromium connection lost; relaunching: %s", str(exc)[:180])
+                await self.invalidate(browser)
+        raise AssertionError("unreachable")
 
-    async def invalidate(self) -> None:
+    async def invalidate(self, browser: Browser | None = None) -> None:
+        """Drop the browser so the next context relaunches it.
+
+        Passing the failed browser makes concurrent workers that hit the same
+        crash relaunch once, instead of closing each other's fresh browser.
+        """
         async with self._lock:
+            if browser is not None and browser is not self._browser:
+                return
             await self._shutdown_locked()
 
     async def _ensure_browser(self) -> Browser:
         async with self._lock:
+            if self._browser is not None and not self._browser.is_connected():
+                log.warning("Chromium disconnected; relaunching (rss_mb=%.1f)", _rss_mb())
+                await self._shutdown_locked()
             should_recycle = (
                 self._browser is not None
                 and self.settings.recycle_after_domains > 0
@@ -268,8 +288,6 @@ class AdvertisingDetector:
                 domain=domain_hint,
             )
         except Exception as exc:
-            if "Target page, context or browser has been closed" in str(exc):
-                await self.browser.invalidate()
             log.exception("ad crawl failed", extra={"url": last_attempted_url})
             return self._failure(
                 raw_url,
@@ -439,6 +457,10 @@ class AdvertisingDetector:
                     landing_pages_requested=landing_page_urls,
                 )
             return result
+        except Exception as exc:
+            if is_dead_browser_error(exc):
+                await self.browser.invalidate(context.browser)
+            raise
         finally:
             try:
                 await context.close()
@@ -660,6 +682,23 @@ class AdvertisingDetector:
                 technical_notes=[error],
             )
         )
+
+
+_DEAD_BROWSER_MARKERS = (
+    "target page, context or browser has been closed",
+    "browser has been closed",
+    "browser has disconnected",
+    "connection closed",
+    "handler is closed",
+    "transport closed",
+    "target closed",
+)
+
+
+def is_dead_browser_error(exc: BaseException) -> bool:
+    """True when the error means Chromium or the Playwright driver is gone."""
+    message = str(exc).lower()
+    return any(marker in message for marker in _DEAD_BROWSER_MARKERS)
 
 
 def _normalize_url(raw: str) -> str:
